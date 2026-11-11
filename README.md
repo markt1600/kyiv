@@ -5,8 +5,9 @@ A browser real-time strategy game set in the war for Kyiv, 2022 onward. It is a 
 salvageable wrecks, skirmish AI, and a world that keeps every scar. Play as **Ukraine (Zelensky)** defending the
 city, or as **Russia (Putin)** attacking from Hostomel.
 
-Everything is generated in code — terrain, buildings, 3D models, textures, particles, icons, sound and music.
-There are no external art or audio assets.
+Everything in the game is generated in code — terrain, buildings, 3D models, textures, particles, icons, sound and music.
+The only image files are a few in-game screenshots (`public/intro/`) used as the title-screen montage while the live
+background battle loads.
 
 ## The map
 
@@ -15,7 +16,8 @@ North is up. It is not a street plan, but the iconic pieces are where you expect
 - **Dnipro** down the eastern third, with the left-bank estates (Troieshchyna, Darnytsia) beyond it
 - **Irpin river** cutting off the north-west, where the invasion force stages around **Hostomel** and the Antonov hangar
 - Six **bridges** (Stoyanka, Irpin, Demydiv; Pivnichnyi, Metro, Paton). Bring one down and vehicles cannot cross there
-  — select it and right-click with armed units. Infantry can still wade a river, slowly
+  — select it and right-click with armed units. Infantry can still wade a river, slowly. With **Military Bridging**
+  researched, engineers can lay a pontoon bridge over the gap
 - Districts of panel blocks, towers, houses and warehouses; **St Sophia**, the **Lavra**, the **Motherland Monument**,
   the **Independence Monument** on the Maidan, the **TV tower**
 - Roads between them: they stay passable when everything else is mud or snow
@@ -51,7 +53,7 @@ Ukraine receives aid for as long as its people survive. Whichever side kills civ
 
 ## Forces
 
-Both sides field the same roles under their own names and markings.
+Both sides field the same core roles under their own names and markings, plus exclusive advanced weapons.
 
 | Built at | Units (Ukraine / Russia) |
 | --- | --- |
@@ -61,6 +63,9 @@ Both sides field the same roles under their own names and markings.
 | Drone Workshop | FPV kamikaze drone, Liutyi / Geran-2 long-range strike drone, Kizilelma / S-70 Okhotnik supersonic UCAV |
 | Armour Depot | Leopard 2A6 / T-90M, M2A2 Bradley / BMPT Terminator, HIMARS / Uragan |
 | Defences | MG bunker, M777 / Msta-B battery, ZU-23-2, radar, Patriot / S-400, EW station, Neptune / Iskander-K launcher |
+
+| Ukraine only | CAESAR truck howitzer, F-16 multirole fighter (Western Arms Packages); Sting interceptor drone (needs Electronic Warfare) |
+| Russia only | TOS-1A thermobaric launcher, Kinzhal hypersonic missiles for the launcher (Thermobaric & Hypersonic Arms); Lancet loitering munition (needs Strike Drones) |
 
 One-way munitions (FPV drones, strike drones, cruise missiles) are real units in the air: air defence can shoot them down
 and EW stations jam drones out of the sky.
@@ -75,6 +80,8 @@ FPV Drone Warfare ─┬─ Electronic Warfare
 Integrated Air Defence ─────────────────────────┴─ Supersonic Combat Drones ─┐
 Modern Armour ─── Precision Strike (cruise missiles) ────────────────────────┴─ Space Programme
 Rail Logistics (4× supply hubs, thermal power plant)
+Military Bridging (pontoon bridges over destroyed crossings)
+Modern Armour ─── Western Arms Packages (Ukraine) / Thermobaric & Hypersonic Arms (Russia)
 ```
 
 The Space Programme unlocks the **Launch Complex**: a recon satellite reveals the whole map on radar and spots every
@@ -109,8 +116,22 @@ npm run sim      # headless AI-vs-AI soak test, e.g. `npm run sim -- 2,2 30 7 0`
 - `src/scenery.ts` – water, foliage, procedural textures
 - `src/ui.ts` – HUD, input, minimap · `src/audio.ts` – synthesized effects and score
 
+## Balance
+
+The core rosters are mirrored. The asymmetry is in the opening and the top end: Russia starts with an armoured column
+already over the border, Ukraine with territorial-defence infantry, anti-tank teams and an aid income that lasts as long
+as its civilians do. Ukraine's exclusives are precise and mobile; Russia's are heavy and hard to stop. Ten Hard-vs-Hard
+AI matches on different seeds split 5–5 (`npm run sim -- 2,2 45 <seed>`).
+
+## Rendering
+
+Physically based sky whose light is re-filtered into the scene's environment map as the day moves; soft 4K sun shadows;
+ground-truth ambient occlusion and mirrored river reflections on High; PBR facades with recessed, reflective glass;
+roads drawn from a distance field with worn markings; wet mud and snow sheen; alpha-cut foliage; bloom, film grade and
+grain; a white-hot thermal view. It is rasterised, not ray traced — the reflections and occlusion are the screen-space
+and planar equivalents.
+
 ## Not done yet
 
-- Bridges cannot be rebuilt, and the AI neither targets them deliberately nor plans around a lost one
-- The AI does not requisition buildings
-- The two factions are mirror-balanced; only names and markings differ
+- The AI rebuilds and destroys bridges by simple rules; it does not plan whole campaigns around the crossings
+- Pontoon bridges go only where a bridge stood

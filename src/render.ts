@@ -692,8 +692,10 @@ export class Renderer {
     _v.set(x, y, z).project(this.camera);
     out.x = (_v.x + 1) / 2 * window.innerWidth; out.y = (1 - _v.y) / 2 * window.innerHeight; out.ok = _v.z < 1 && _v.z > -1;
   }
+  /** spectator mode: everything is visible */
+  spectate = false;
   shown(u: Unit) {
-    if (u.team.ally === this.me.ally) return true;
+    if (this.spectate || u.team.ally === this.me.ally) return true;
     if (u.def.cls === 'building') return ((u.seen >> this.me.id) & 1) === 1;
     return (this.me.vis[this.map.cellOf(u.x, u.z)] & 2) !== 0;
   }

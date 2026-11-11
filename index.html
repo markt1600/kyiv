@@ -43,21 +43,26 @@
 
   <div id="menu">
     <canvas id="menuBg"></canvas>
+    <div id="stills"><div class="still"></div><div class="still"></div></div>
+    <div class="shade"></div>
     <div class="grain"></div>
-    <div class="menu-wrap">
-      <header>
-        <div class="kicker">24 FEBRUARY 2022 · 05:00 EET</div>
-        <h1><span class="t1">KYIV</span></h1>
-        <p class="tag">Defence of the capital</p>
-      </header>
+    <div class="menu-left">
+      <div class="kicker">24 FEBRUARY 2022 · 05:00 EET</div>
+      <h1><span class="t1">KYIV</span></h1>
+      <p class="tag">Defence of the capital</p>
+      <p class="blurb">Seasons turn. Bridges fall. Buildings scar. The dead stay where they fell.</p>
+      <div id="liveTag"><i></i><span>Live battle · AI vs AI</span></div>
+    </div>
+    <div class="menu-right">
+      <div class="mr-title">Choose your side</div>
       <div class="sides" id="optSide">
         <div class="side ua" data-side="0">
           <div class="flag"></div>
           <div class="sd-body">
             <div class="sd-role">Defend</div>
             <div class="sd-name">UKRAINE</div>
-            <div class="sd-lead">President Zelensky · command post in the government quarter</div>
-            <ul><li>Territorial defence and anti-tank teams hold the approaches</li><li>International aid for as long as the city’s people survive</li><li>CAESAR · F-16 · Patriot · Sting interceptor drones</li></ul>
+            <div class="sd-lead">President Zelensky · government quarter</div>
+            <div class="sd-kit">Territorial defence · international aid · CAESAR · F-16 · Patriot · Sting interceptors</div>
           </div>
         </div>
         <div class="side ru" data-side="1">
@@ -65,20 +70,17 @@
           <div class="sd-body">
             <div class="sd-role">Attack</div>
             <div class="sd-name">RUSSIA</div>
-            <div class="sd-lead">President Putin · command post at Hostomel airfield</div>
-            <ul><li>An armoured spearhead already across the border</li><li>Must force the Irpin and Dnipro crossings</li><li>TOS-1A · Lancet · S-400 · Kinzhal hypersonic missiles</li></ul>
+            <div class="sd-lead">President Putin · Hostomel airfield</div>
+            <div class="sd-kit">Armoured spearhead · must force the rivers · TOS-1A · Lancet · S-400 · Kinzhal</div>
           </div>
         </div>
       </div>
-      <div class="menu-card">
-        <div class="optgrid">
-          <div class="opt"><label>Difficulty</label><div class="seg" id="optDiff"></div></div>
-          <div class="opt"><label>Map size</label><div class="seg" id="optSize"></div></div>
-          <div class="opt"><label>Start</label><div class="seg" id="optDate"></div></div>
-          <div class="opt"><label>Graphics</label><div class="seg" id="optGfx"></div></div>
-          <div class="opt"><label>Seed</label><div class="seedrow"><input id="optSeed" type="text" inputmode="numeric" /><button id="seedRnd" title="Random seed">⟳</button></div></div>
-        </div>
-        <button id="btnStart">Begin the battle</button>
+      <div class="opt"><label>Difficulty</label><div class="seg" id="optDiff"></div></div>
+      <div class="opt"><label>Map size</label><div class="seg" id="optSize"></div></div>
+      <div class="opt"><label>Start</label><div class="seg" id="optDate"></div></div>
+      <div class="opt"><label>Graphics</label><div class="seg" id="optGfx"></div></div>
+      <div class="opt"><label>Seed</label><div class="seedrow"><input id="optSeed" type="text" inputmode="numeric" /><button id="seedRnd" title="Random seed">⟳</button></div></div>
+      <button id="btnStart">Begin the battle</button>
       <details><summary>How to play</summary>
         <div class="help">
           <p>Your <b>command post</b> directs the war. Put <b>Logistics Hubs</b> on supply points (crates on gravel pads) and build <b>generators</b> for power. Everything is paid for gradually while it is built. Lose the command post and the war is lost.</p>
@@ -95,8 +97,6 @@
           </ul>
         </div>
       </details>
-      </div>
-      <footer>Seasons turn · bridges fall · buildings scar · the dead stay where they fell</footer>
     </div>
   </div>
 
