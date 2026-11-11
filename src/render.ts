@@ -292,7 +292,7 @@ export class Renderer {
     r.setPixelRatio(Math.min(window.devicePixelRatio, quality >= 2 ? 2 : 1.25));
     r.shadowMap.enabled = quality >= 1; r.shadowMap.type = THREE.PCFSoftShadowMap;
     r.localClippingEnabled = true;
-    r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.2;
+    r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.1;
     this.camera = new THREE.PerspectiveCamera(42, 1, 2, 4000);
     this.scene.background = new THREE.Color(bio.sky).multiplyScalar(0.35);
     this.scene.fog = new THREE.Fog(new THREE.Color(bio.sky).multiplyScalar(0.35).getHex(), 500, 3600);
@@ -585,7 +585,7 @@ export class Renderer {
         ao.overrideVisibility = () => { ov(); for (const o of skip) o.visible = false; };
         this.composer.addPass(ao);
       }
-      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.32, 0.5, 0.95); this.composer.addPass(this.bloomPass);
+      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.2, 0.35, 1.0); this.composer.addPass(this.bloomPass);
       this.composer.addPass(new OutputPass());
       this.grade = new ShaderPass({
         uniforms: { tDiffuse: { value: null }, uHeat: { value: 0 }, uT: this.uTime, uCold: this.uSeason.snow, uFlir: { value: 0 } },
@@ -636,7 +636,7 @@ export class Renderer {
     sky.multiplyScalar(lerp(0.62, 0.5, overcast)).lerp(_c2.setHex(0x0a0e16), night);
     (this.scene.background as THREE.Color).copy(sky); (this.scene.fog as THREE.Fog).color.copy(sky);
     this.scene.environmentIntensity = lerp(1.35, 0.6, night);
-    if (this.bloomPass) this.bloomPass.strength = lerp(0.3, 0.6, night);
+    if (this.bloomPass) this.bloomPass.strength = lerp(0.18, 0.28, night);
     this.uSeason.snow.value = g.snow; this.uSeason.mud.value = g.mud; this.uSeason.dry.value = g.dry;
     if (this.grade) this.grade.uniforms.uFlir.value = this.flir ? 1 : 0;
     this.unitMat.emissiveIntensity = this.flir ? 0.75 : 0; // engines and bodies glow in thermal
@@ -766,7 +766,7 @@ export class Renderer {
     const wet = map.heightAt(x, z) < map.waterY - 0.5 && y < map.waterY + 6;
     const cd = Math.hypot(x - this.cam.x, z - this.cam.z);
     this.shake = Math.min(3, this.shake + size * size * 0.012 / (1 + cd / (this.cam.dist * 0.5 + 60)));
-    this.flash(x, y + 4 + size * 0.3, z, clamp(size * 110, 300, 7000), 0.25 + size * 0.02, wet ? 0xcfe8ff : 0xffa860);
+    this.flash(x, y + 4 + size * 0.3, z, clamp(size * 70, 200, 4200), 0.14 + size * 0.01, wet ? 0xcfe8ff : 0xffa860);
     if (wet) {
       // water plume
       for (let i = 0; i < n; i++) {
@@ -777,28 +777,33 @@ export class Renderer {
       if (this.rings.length < 40) this.rings.push({ x, y: map.waterY + 0.4, z, life: 0.9, max: 0.9, size: size * 3 });
       return;
     }
-    // white-hot core, rolling fireball, sparks
-    f.spawn(x, y + size * 0.3, z, 0, 0, 0, 0.12, size * 6, 3, 2.4, 1.6, 0.9, 0.5);
-    for (let i = 0; i < n; i++) {
-      const a = Math.random() * 6.283, e = Math.random() * 1.5, v = size * (1 + Math.random() * 3.2);
-      f.spawn(x, y + 1, z, Math.cos(a) * Math.cos(e) * v, Math.sin(e) * v * 1.1 + size * 0.6, Math.sin(a) * Math.cos(e) * v, 0.35 + Math.random() * 0.6 + size * 0.012, size * (0.8 + Math.random() * 1.0), 2.5, 1.4, 0.45, 0.8, 0.9, 3.2, -4, 1);
-    }
-    for (let i = 0; i < n * 0.6; i++) {
-      const a = Math.random() * 6.283, v = size * (3 + Math.random() * 7);
-      f.spawn(x, y + 1, z, Math.cos(a) * v, size * (2 + Math.random() * 6), Math.sin(a) * v, 0.5 + Math.random() * 0.9, 1.1 + Math.random(), 3.4, 2.4, 1, 1, 0, 0.7, 65, 1);
-    }
-    // smoke: rising column plus a low dust skirt
-    for (let i = 0; i < n * 0.55; i++) {
-      const a = Math.random() * 6.283, v = size * (0.3 + Math.random() * 1.2), g = 0.06 + Math.random() * 0.08;
-      s.spawn(x + Math.cos(a) * size * 0.35, y + 1 + Math.random() * size * 0.4, z + Math.sin(a) * size * 0.35, Math.cos(a) * v, size * (0.7 + Math.random() * 1.3), Math.sin(a) * v, 1.4 + Math.random() * 1.8 + size * 0.05, size * 1.5, g, g, g, 0.62, 2.2, 1.1, -1.5);
-    }
-    _c.setHex(map.biome.low);
+    // a real blast: a split-second flash, a small dirty fireball that is gone almost at once, a fountain of thrown earth, then smoke and dust
+    // the fire itself stays small however big the blast: the scale of a large explosion is carried by its smoke and thrown earth
+    const fs = Math.min(size, 9) * (this.night > 0.5 ? 0.75 : 1);
+    f.spawn(x, y + fs * 0.3, z, 0, 0, 0, 0.07, fs * 2.6, 2.4, 1.9, 1.3, 0.8, 0.4);
     for (let i = 0; i < n * 0.4; i++) {
+      const a = Math.random() * 6.283, e = Math.random() * 1.5, v = size * (0.8 + Math.random() * 2.2);
+      f.spawn(x, y + 1, z, Math.cos(a) * Math.cos(e) * v, Math.sin(e) * v * 1.1 + size * 0.5, Math.sin(a) * Math.cos(e) * v, 0.22 + Math.random() * 0.3 + size * 0.006, fs * (0.4 + Math.random() * 0.5), 1.7, 0.8, 0.22, 0.55, 0.8, 3.4, -4, 1);
+    }
+    for (let i = 0; i < n * 0.45; i++) { // sparks and burning fragments
+      const a = Math.random() * 6.283, v = size * (3 + Math.random() * 7);
+      f.spawn(x, y + 1, z, Math.cos(a) * v, size * (2 + Math.random() * 6), Math.sin(a) * v, 0.5 + Math.random() * 0.9, 0.5 + Math.random() * 0.5, 3, 2, 0.8, 1, 0, 0.7, 65, 1);
+    }
+    _c.setHex(map.biome.low); const er = _c.r * 0.35 + 0.07, eg = _c.g * 0.3 + 0.06, eb = _c.b * 0.25 + 0.04, sn = this.game.snow;
+    for (let i = 0; i < n * 0.6; i++) { // earth thrown up in a cone, falling back
+      const a = Math.random() * 6.283, v = size * (0.6 + Math.random() * 1.8), k = 0.7 + Math.random() * 0.6;
+      s.spawn(x + Math.cos(a) * size * 0.2, y + 0.5, z + Math.sin(a) * size * 0.2, Math.cos(a) * v, size * (3 + Math.random() * 5.5), Math.sin(a) * v, 0.9 + Math.random() * 0.8, size * (0.3 + Math.random() * 0.4), lerp(er * k, 0.8, sn * 0.6), lerp(eg * k, 0.8, sn * 0.6), lerp(eb * k, 0.82, sn * 0.6), 0.85, 0.8, 0.5, 42);
+    }
+    for (let i = 0; i < n * 0.7; i++) { // black-grey smoke boiling up and drifting off
+      const a = Math.random() * 6.283, v = size * (0.3 + Math.random() * 1.1), g = 0.035 + Math.random() * 0.07;
+      s.spawn(x + Math.cos(a) * size * 0.35, y + 1 + Math.random() * size * 0.5, z + Math.sin(a) * size * 0.35, Math.cos(a) * v, size * (0.7 + Math.random() * 1.4), Math.sin(a) * v, 1.8 + Math.random() * 2.4 + size * 0.06, size * 1.3, g, g, g * 1.05, 0.7, 2.2, 1.1, -1.5);
+    }
+    for (let i = 0; i < n * 0.4; i++) { // dust skirt rolling out along the ground
       const a = Math.random() * 6.283, v = size * (2 + Math.random() * 2.5);
       s.spawn(x, y + 0.6, z, Math.cos(a) * v, 1 + Math.random() * 2, Math.sin(a) * v, 0.9 + Math.random() * 0.7, size * 1.1, _c.r * 0.8 + 0.1, _c.g * 0.8 + 0.1, _c.b * 0.8 + 0.1, 0.3, 2.6, 2.4);
     }
-    if (heavy || size > 9) for (let i = 0; i < 14 * q; i++) { // mushroom stem
-      const g = 0.05 + Math.random() * 0.06;
+    if (heavy || size > 9) for (let i = 0; i < 14 * q; i++) { // rising column
+      const g = 0.04 + Math.random() * 0.06;
       s.spawn(x + (Math.random() - 0.5) * size * 0.4, y + 2, z + (Math.random() - 0.5) * size * 0.4, 0, size * (1.5 + Math.random() * 2.2), 0, 2.5 + Math.random() * 2, size * 1.3, g, g, g, 0.7, 2.6, 0.9, -2);
     }
     if (this.rings.length < 40) this.rings.push({ x, y: y + 0.8, z, life: 0.45, max: 0.45, size: size * 3.4 });
@@ -1187,7 +1192,7 @@ export class Renderer {
       if (r.life <= 0) { this.rings.splice(i, 1); continue; }
       const k = 1 - r.life / r.max, sc = r.size * (0.2 + k);
       _q.identity(); _p.set(r.x, r.y, r.z); _v.set(sc, 1, sc); _m.compose(_p, _q, _v);
-      this.ringIM.setMatrixAt(nr, _m); this.ringIM.setColorAt(nr, _c.setRGB(1.6, 1.1, 0.6).multiplyScalar((1 - k) * (1 - k))); nr++;
+      this.ringIM.setMatrixAt(nr, _m); this.ringIM.setColorAt(nr, _c.setRGB(0.5, 0.42, 0.32).multiplyScalar((1 - k) * (1 - k) * 0.5)); nr++;
     }
     this.ringIM.count = nr; this.ringIM.instanceMatrix.needsUpdate = true; if (this.ringIM.instanceColor) this.ringIM.instanceColor.needsUpdate = true;
 
@@ -1205,10 +1210,10 @@ export class Renderer {
         const x = cx + (Math.random() - 0.5) * CELL * 1.1, z = cz + (Math.random() - 0.5) * CELL * 1.1;
         const y = map.groundY(x, z) + (blk ? 2 + Math.random() * 7 : tall ? Math.random() * 6 : 0.5);
         const sz = (tall ? 8 : blk ? 7 : 5) * (0.7 + Math.random() * 0.7);
-        fireP.spawn(x, y, z, (Math.random() - 0.5) * 4, 9 + Math.random() * 10, (Math.random() - 0.5) * 4, 0.45 + Math.random() * 0.45, sz * 0.55, 1.9, 0.62, 0.1, 0.6, -0.6, 0.4, -12, 1);
+        fireP.spawn(x, y, z, (Math.random() - 0.5) * 4, 9 + Math.random() * 10, (Math.random() - 0.5) * 4, 0.4 + Math.random() * 0.4, sz * 0.42, 1.7, 0.6, 0.1, 0.6, -0.6, 0.4, -12, 1);
         if (Math.random() < 0.4) fireP.spawn(x, y + 0.6, z, 0, 5, 0, 0.28, sz * 0.3, 2.6, 1.7, 0.5, 0.5, 0, 0, 0, 1);
-        if (Math.random() < 0.3) { const gcol = 0.05 + Math.random() * 0.07; this.smoke.spawn(x, y + 5 + Math.random() * 4, z, 0, 9 + Math.random() * 6, 0, 3 + Math.random() * 2.5, sz * 1.1, gcol, gcol, gcol, 0.5, 2.6, 0.25, -1.2); }
-        if (Math.random() < 0.12) fireP.spawn(x, y + 2, z, (Math.random() - 0.5) * 10, 16 + Math.random() * 14, (Math.random() - 0.5) * 10, 1.4 + Math.random(), 0.9, 3.4, 2.2, 0.8, 1, 0, 0.3, 6, 1);
+        if (Math.random() < 0.45) { const gcol = 0.04 + Math.random() * 0.06; this.smoke.spawn(x, y + 5 + Math.random() * 4, z, 0, 9 + Math.random() * 6, 0, 3.5 + Math.random() * 3, sz * 1.3, gcol, gcol, gcol, 0.5, 2.6, 0.25, -1.2); }
+        if (Math.random() < 0.05) fireP.spawn(x, y + 2, z, (Math.random() - 0.5) * 10, 16 + Math.random() * 14, (Math.random() - 0.5) * 10, 1.2 + Math.random(), 0.4, 3.2, 2, 0.7, 1, 0, 0.3, 6, 1);
       }
     }
     if (fn) {
