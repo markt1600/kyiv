@@ -202,7 +202,7 @@ export class UI {
     this.on(cv, 'wheel', (e: WheelEvent) => {
       e.preventDefault();
       const c = this.r.cam, before = this.r.pick(e.clientX, e.clientY), k = Math.exp(e.deltaY * 0.0012);
-      const nd = clamp(c.dist * k, 50, 1500);
+      const nd = clamp(c.dist * k, 20, 1500);
       if (before && e.deltaY < 0) { const f = 1 - nd / c.dist; c.x += (before.x - c.x) * f; c.z += (before.z - c.z) * f; }
       c.dist = nd;
     }, { passive: false });

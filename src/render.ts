@@ -566,7 +566,7 @@ export class Renderer {
   // ───────────── camera / picking ─────────────
   private updateCamera() {
     const c = this.cam, S = this.map.size;
-    c.x = clamp(c.x, 0, S); c.z = clamp(c.z, 0, S); c.dist = clamp(c.dist, 50, 1500); c.pitch = clamp(c.pitch, 0.45, 1.5);
+    c.x = clamp(c.x, 0, S); c.z = clamp(c.z, 0, S); c.dist = clamp(c.dist, 20, 1500); c.pitch = clamp(c.pitch, 0.45, 1.5);
     const ty = this.map.groundY(c.x, c.z);
     const cp = Math.cos(c.pitch), sp = Math.sin(c.pitch);
     this.camera.position.set(c.x + Math.sin(c.yaw) * cp * c.dist, ty + sp * c.dist, c.z + Math.cos(c.yaw) * cp * c.dist);
