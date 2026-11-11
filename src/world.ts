@@ -228,7 +228,11 @@ function bridgeGeo(b: Bridge): THREE.BufferGeometry {
     if (!tilt) { P.push(bx(l, 0.12, 0.5, xm, y - 0.18, 0, 0xc8c4b0)); for (const s of [-1, 1]) { P.push(bx(l, 0.22, 0.22, xm, y + 1.7, s * 11.6, 0x70767c), bx(l, 0.16, 0.16, xm, y + 1.0, s * 11.6, 0x70767c)); for (let x = x0 + 2; x <= x1 - 1; x += 8) P.push(bx(0.3, 1.5, 0.3, x, y + 0.3, s * 11.6, 0x70767c)); } }
   };
   for (let x = -L / 2 + 14; x <= L / 2 - 10; x += big ? 30 : 22) P.push(bx(4, b.dead ? 9 + r() * 5 : 14, 20, x, -15, 0, 0x7d7a72, false, b.dead ? 0.7 : 1));
-  if (!b.dead) {
+  if (!b.dead && b.pontoon) { // a floating military bridge: steel treadway on a row of pontoons, lying between the stumps of the old one
+    span(-L / 2, -L / 2 + 12, 0, 0); span(L / 2 - 12, L / 2, 0, 0);
+    P.push(bx(L - 22, 0.5, 11, 0, -0.9, 0, 0x4a5238), bx(L - 22, 0.4, 0.5, 0, -0.4, 5.4, 0x39402c), bx(L - 22, 0.4, 0.5, 0, -0.4, -5.4, 0x39402c));
+    for (let x = -L / 2 + 14; x <= L / 2 - 14; x += 7.5) P.push(bx(6.2, 1.7, 16, x, -2.7, 0, 0x424a34));
+  } else if (!b.dead) {
     span(-L / 2, L / 2, 0, 0);
     if (big) for (const s of [-1, 1]) for (let x = -L / 2 + 14; x < L / 2 - 30; x += 30) { // steel arch spans
       const pt = (k: number) => [x + 15 - Math.cos(k / 6 * Math.PI) * 15, Math.sin(k / 6 * Math.PI) * 7];
@@ -269,7 +273,7 @@ const COATS = [0x3a4a6a, 0x7a2f2a, 0x4a4a4a, 0x8a7a5a, 0x2f5a4a, 0xa0a0a8, 0x5a3
 export class World {
   private map: GameMap; private meshes: (THREE.Mesh | null)[] = []; private mat: THREE.MeshStandardMaterial; private ruinMat: THREE.MeshStandardMaterial;
   private scene: THREE.Scene; private bodyIM: THREE.InstancedMesh; private bloodIM: THREE.InstancedMesh; private civIM: THREE.InstancedMesh;
-  private uSnow = { value: 0 }; private t = 0; private bdead: boolean[] = []; private bridges: THREE.Mesh[] = []; private bridgeMat!: THREE.Material; private quality = 0; private hitMat: THREE.MeshStandardMaterial;
+  private uSnow = { value: 0 }; private t = 0; private bkey: string[] = []; private bridges: THREE.Mesh[] = []; private bridgeMat!: THREE.Material; private quality = 0; private hitMat: THREE.MeshStandardMaterial;
 
   constructor(scene: THREE.Scene, map: GameMap, quality: number) {
     this.map = map; this.scene = scene;
@@ -327,7 +331,7 @@ export class World {
     this.t -= dt;
     if (this.t <= 0) {
       this.t = 0.4;
-      map.bridges.forEach((b, i) => { if (b.dead && !this.bdead[i]) { this.bdead[i] = true; this.dropBridge(i); } });
+      map.bridges.forEach((b, i) => { const k = b.dead ? 'd' : b.pontoon ? 'p' : 'o'; if (this.bkey[i] !== undefined && this.bkey[i] !== k) this.dropBridge(i); this.bkey[i] = k; });
       map.bridges.forEach((b, i) => { if (!this.bridges[i].visible && (vis[map.cellOf(b.x, b.z)] & 1)) this.bridges[i].visible = true; });
       for (const c of map.civ) { const m = this.meshes[c.id]; if (m && !m.visible && (vis[map.cellOf(c.x, c.z)] & 1)) m.visible = true; }
     }

@@ -607,7 +607,7 @@ export class Renderer {
     return (this.me.vis[this.map.cellOf(u.x, u.z)] & 2) !== 0;
   }
 
-  setGhost(def: UnitDef | null, x = 0, z = 0, ok = true, yOff = 0) {
+  setGhost(def: UnitDef | null, x = 0, z = 0, ok = true, yOff = 0, rot = 0) {
     if (def !== this.ghostDef) {
       this.ghost.clear(); this.ghostDef = def;
       if (def) for (const [geo, piv] of partList(def, geosFor(def, this.me.id))) { const m = new THREE.Mesh(geo, this.ghostMat); if (piv) m.position.fromArray(piv); this.ghost.add(m); }
@@ -615,7 +615,7 @@ export class Renderer {
     this.ghost.visible = !!def; this.rangeRing.visible = false;
     if (def) {
       const y = this.map.groundY(x, z);
-      this.ghost.position.set(x, y + 0.3 + yOff, z); this.ghostMat.color.setHex(ok ? 0x40ff80 : 0xff4030);
+      this.ghost.position.set(x, y + 0.3 + yOff, z); this.ghost.rotation.y = rot; this.ghostMat.color.setHex(ok ? 0x40ff80 : 0xff4030);
       const rg = def.jam || (def.weapons[0] && !def.weapons[0].bld ? def.weapons[0].range : 0) || def.radar;
       if (rg) { this.rangeRing.visible = true; this.rangeRing.position.set(x, y + 2, z); this.rangeRing.scale.setScalar(rg); }
     }
@@ -865,7 +865,7 @@ export class Renderer {
     for (const u of g.units) {
       if (u.dead || !this.shown(u)) continue;
       const d = u.def;
-      if (d.cls === 'building' && !this.cleared.has(u)) { this.cleared.add(u); this.scenery.clear(u.cx, u.cz, d.fw, d.fh); }
+      if (d.cls === 'building' && !d.neutral && !d.span && !d.reuse && !this.cleared.has(u)) { this.cleared.add(u); this.scenery.clear(u.cx, u.cz, d.fw, d.fh); }
       const x = lerp(u.px, u.x, alpha), z = lerp(u.pz, u.z, alpha);
       let y = lerp(u.py, u.y, alpha), kn = 0;
       const h = u.ph + angDiff(u.ph, u.heading) * alpha;
@@ -1023,7 +1023,7 @@ export class Renderer {
           a.renderOrder = b.renderOrder = 7; grp.add(a, b);
         }
         const pc = d.reuse ? g.civFor(d, o.cx!, o.cz!) : null;
-        grp.position.set(o.x, map.groundY(o.x, o.z) + 0.2 + (pc ? pc.h : 0), o.z);
+        grp.position.set(o.x, map.groundY(o.x, o.z) + 0.2 + (pc ? pc.h : 0), o.z); if (d.span) grp.rotation.y = map.bridges[o.cx!].ang;
         this.scene.add(grp); this.plans.set(key, grp);
       }
     }

@@ -337,13 +337,14 @@ export class UI {
   private free(def: UnitDef, cx: number, cz: number): boolean {
     if (!this.game.canPlace(def, cx, cz, this.me)) return false;
     const w = def.cls === 'building' ? def.fw : 3, h = def.cls === 'building' ? def.fh : 3;
+    if (def.span) return true;
     if (def.reuse) { for (const u of this.game.units) if (u.team === this.me) for (const o of u.orders) if (o.type === 'build' && !o.target && o.def && o.def.reuse && o.cx === cx && o.cz === cz && o.def !== def) return false; return true; }
     for (const u of this.game.units) {
       if (u.team !== this.me || !u.def.bp) continue;
       for (const o of u.orders) {
         if (o.type !== 'build' || o.target || !o.def) continue;
         if (o.def === def && o.cx === cx && o.cz === cz) continue; // same plan: other builders may join it
-        if (o.def.reuse) continue;
+        if (o.def.reuse || o.def.span) continue;
         const ow = o.def.cls === 'building' ? o.def.fw : 3, oh = o.def.cls === 'building' ? o.def.fh : 3;
         if (cx < o.cx! + ow && cx + w > o.cx! && cz < o.cz! + oh && cz + h > o.cz!) return false;
       }
@@ -353,7 +354,10 @@ export class UI {
   private placeCell(sx: number, sy: number): { cx: number; cz: number; ok: boolean } | null {
     const def = this.placing!, p = this.r.pick(sx, sy); if (!p) return null;
     let cx: number, cz: number;
-    if (def.reuse) {
+    if (def.span) {
+      let bi = -1, bd = 170; this.game.map.bridges.forEach((b, i) => { const d = Math.hypot(b.x - p.x, b.z - p.z); if (b.dead && d < bd) { bd = d; bi = i; } });
+      return { cx: bi, cz: 0, ok: bi >= 0 && this.free(def, bi, 0) };
+    } else if (def.reuse) {
       const c = this.game.nearestCiv(def, p.x, p.z, 70);
       if (c) { cx = c.cx; cz = c.cz; } else { cx = Math.floor(p.x / CELL); cz = Math.floor(p.z / CELL); }
     } else if (def.extract) {
@@ -367,7 +371,7 @@ export class UI {
   private rowCells(a: { cx: number; cz: number }, b: { cx: number; cz: number }, def: UnitDef) {
     const out: { cx: number; cz: number }[] = [];
     const dx = b.cx - a.cx, dz = b.cz - a.cz;
-    if (def.extract || def.reuse || def.cls !== 'building' || (Math.abs(dx) < def.fw && Math.abs(dz) < def.fh)) return [b];
+    if (def.extract || def.reuse || def.span || def.cls !== 'building' || (Math.abs(dx) < def.fw && Math.abs(dz) < def.fh)) return [b];
     const horiz = Math.abs(dx) >= Math.abs(dz), step = horiz ? def.fw : def.fh, n = Math.floor(Math.abs(horiz ? dx : dz) / step);
     for (let i = 0; i <= Math.min(n, 15); i++) out.push({ cx: a.cx + (horiz ? Math.sign(dx) * i * step : 0), cz: a.cz + (horiz ? 0 : Math.sign(dz) * i * step) });
     return out;
@@ -408,7 +412,9 @@ export class UI {
         let wx = def.cls === 'building' ? (pc.cx + def.fw / 2) * CELL : (pc.cx + 1.5) * CELL, wz = def.cls === 'building' ? (pc.cz + def.fh / 2) * CELL : (pc.cz + 1.5) * CELL, yo = 0;
         const civ = def.reuse ? this.game.civFor(def, pc.cx, pc.cz) : null;
         if (civ) { wx = civ.x; wz = civ.z; yo = civ.h; }
-        this.r.setGhost(def, wx, wz, pc.ok, yo);
+        const sb = def.span ? this.game.map.bridges[pc.cx] : null;
+        if (def.span) { const pk = this.r.pick(this.mx, this.my); wx = sb ? sb.x : pk ? pk.x : 0; wz = sb ? sb.z : pk ? pk.z : 0; }
+        this.r.setGhost(def, wx, wz, pc.ok, yo, sb ? sb.ang : 0);
       } else this.r.setGhost(null);
     } else this.r.setGhost(null);
     $('gl').style.cursor = this.placing ? 'cell' : this.mode ? 'crosshair' : 'default';
@@ -499,7 +505,8 @@ export class UI {
     if (this.placing && this.placeStart) {
       const end = this.placeCell(this.mx, this.my);
       if (end) for (const c of this.rowCells(this.placeStart, end, this.placing)) {
-        const def = this.placing, wx = (c.cx + def.fw / 2) * CELL, wz = (c.cz + def.fh / 2) * CELL;
+        const def = this.placing; if (def.span || def.reuse) continue;
+        const wx = (c.cx + def.fw / 2) * CELL, wz = (c.cz + def.fh / 2) * CELL;
         r.project(wx, map.groundY(wx, wz) + 1, wz, p);
         if (p.ok) { ctx.fillStyle = this.free(def, c.cx, c.cz) ? 'rgba(80,255,140,0.8)' : 'rgba(255,70,50,0.8)'; ctx.fillRect(p.x - 5, p.y - 5, 10, 10); }
       }
@@ -538,7 +545,7 @@ export class UI {
     const cv = $('civ'); cv.textContent = 'Civilians ' + g.civAlive + '/' + g.civTotal + (me.condemn ? ' · sanctions −' + Math.round(Math.min(0.4, me.condemn * 0.015) * 100) + '%' : me.fac === 0 ? ' · aid +' + me.aid.toFixed(1) : '');
     cv.className = me.condemn ? 'bad' : '';
     $('wind').textContent = 'Wind ' + Math.round(g.wind * 100) + '%' + (me.sat ? ' · SAT' + (me.sat & 2 ? '+GPS' : '') : '');
-    $('modeHint').textContent = this.placing ? (this.placing.reuse ? 'Requisition a building for ' : 'Place ') + nm(this.placing, me.fac) + ' — Shift: multiple · drag: row · right-click: cancel'
+    $('modeHint').textContent = this.placing ? (this.placing.span ? 'Click a destroyed bridge to lay a ' : this.placing.reuse ? 'Requisition a building for ' : 'Place ') + nm(this.placing, me.fac) + ' — Shift: multiple · drag: row · right-click: cancel'
       : this.mode ? ({ fight: 'Attack-move', patrol: 'Patrol', guard: 'Guard', repair: 'Repair', reclaim: 'Salvage area', move: 'Move' } as any)[this.mode] + ' — click target' : '';
     this.refreshPanel();
   }
@@ -567,6 +574,7 @@ export class UI {
         ob('Stop', 'S', false, () => { for (const u of this.mine()) { this.game.clearOrders(u); if (u.def.factory) u.queue.length = 0; } });
         if (builder && builder.def.factory) ob('Repeat: ' + (builder.repeat ? 'ON' : 'off'), 'R', builder.repeat, () => { const v = !builder.repeat; for (const u of this.mine()) if (u.def.factory) u.repeat = v; this.panelKey = ''; });
         if (builder) for (const id of builder.def.builds) {
+          if (DEFS[id].fac >= 0 && DEFS[id].fac !== fac) continue;
           const def = DEFS[id], b = document.createElement('div'), locked = !g.unlocked(this.me, def);
           b.className = 'bbtn' + (this.placing === def ? ' sel' : '') + (locked ? ' locked' : ''); b.dataset.id = id;
           b.innerHTML = `<img src="${this.icons[id] || ''}" draggable="false"><span class="cnt"></span>${locked ? '<span class="lock">🔒</span>' : def.reuse ? '<span class="t2">REQ</span>' : def.tier > 1 ? '<span class="t2">T' + def.tier + '</span>' : ''}<span class="lbl">${nm(def, fac)}</span>`;
@@ -587,7 +595,7 @@ export class UI {
           grid.appendChild(b);
         }
         if (lab) for (const t of TECH_LIST) {
-          if (t.at !== lab.def.lab) continue;
+          if (t.at !== lab.def.lab || t.fac !== undefined && t.fac !== fac) continue;
           const b = document.createElement('div'), done = this.me.tech.has(t.id), can = g.canResearch(this.me, t);
           b.className = 'bbtn tech' + (done ? ' done' : can ? '' : ' locked'); b.dataset.tech = t.id;
           b.innerHTML = `<span class="tn">${t.name}</span><span class="cnt"></span>${done ? '<span class="lock">✓</span>' : can ? '' : '<span class="lock">🔒</span>'}`;

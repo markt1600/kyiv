@@ -33,6 +33,7 @@ export class AI {
   private enemyAir = 0; private enemyDef = 0; private lastDefend = -999; private lastRaid = 0; private lastScout = 0;
   private rallyX = 0; private rallyZ = 0; private firstFac: string;
   private rng: () => number;
+  private cutOff = false; private cutT = -9999; private pressure = 0; private lastCut = -9999;
   private labs: Unit[] = []; private kamis: Unit[] = []; private enemyDrones = 0;
 
   constructor(game: Game, team: Team) {
@@ -52,6 +53,12 @@ export class AI {
     const g = this.game, tm = this.team;
     if (tm.dead || g.tick % this.P.think !== this.phase) return;
     this.census();
+    // can our armour still drive to the enemy? (a blown bridge may have cut us off)
+    if (g.tick - this.cutT > 20 * TICK) {
+      this.cutT = g.tick; const en = this.pickEnemy(tm.startX, tm.startZ);
+      if (en) { g.map.findPath(tm.startX, tm.startZ, en.startX, en.startZ, 0); this.cutOff = !g.map.found; }
+    }
+    this.pressure *= 0.97;
     for (const b of this.builders) this.manageBuilder(b);
     for (const f of this.factories) if (f.built && !f.queue.length && !f.buildee) this.produce(f);
     this.research();
@@ -74,7 +81,7 @@ export class AI {
       if (!u.built) { if (!u.inFactory && u.def.cls === 'building') this.frames.push(u); continue; }
       const d = u.def;
       if (d.lab) { this.labs.push(u); continue; }
-      if (d.kami && d.id !== 'fpv') { if (d.id === 'loiter') this.kamis.push(u); continue; }
+      if (d.kami && d.id !== 'fpv' && d.id !== 'sting' && d.id !== 'lancet') { if (d.id === 'loiter') this.kamis.push(u); continue; }
       if (d.factory) this.factories.push(u);
       else if (d.bp) {
         this.builders.push(u);
@@ -200,6 +207,29 @@ export class AI {
     if (eLow && this.tryEnergy(b)) return;
     if (pendMex < 1 + P.expand && tm.metal < tm.stM * 0.9 && this.tryMex(b, reach)) return;
 
+    // re-bridge: lay pontoons over the dead crossing that best reconnects us (or any one close to home)
+    if (!prime && tm.tech.has('t_bridge') && !this.pend.pontoon && !this.have('pontoon')) {
+      const en = this.pickEnemy(tm.startX, tm.startZ); let bi = -1, bs = 1e9;
+      g.map.bridges.forEach((br, i) => {
+        if (!br.dead) return;
+        const dh = dist(br.x, br.z, tm.startX, tm.startZ), s = dh + (en ? dist(br.x, br.z, en.startX, en.startZ) : 0);
+        if ((this.cutOff || dh < 420) && s < bs) { bs = s; bi = i; }
+      });
+      if (bi >= 0 && g.canPlace(DEFS.pontoon, bi, 0, tm)) { g.giveBuild(b, DEFS.pontoon, bi, 0); this.pend.pontoon = 1; return; }
+    }
+    // requisition city buildings as forward bases: a camp toward the front (vital in winter), a lookout, a garage drone shop
+    if (!prime && secs > 200 && tm.incM > 5) {
+      const req = (id: string, ox: number, oz: number, r: number) => {
+        const def = DEFS[id]; if (this.pend[id] || !g.unlocked(tm, def)) return false;
+        const c = g.nearestCiv(def, ox, oz, r); if (!c) return false;
+        for (const e of g.teams) if (e.ally !== tm.ally && dist(c.x, c.z, e.startX, e.startZ) < 260) return false;
+        g.giveBuild(b, def, c.cx, c.cz); this.pend[id] = 1; return true;
+      };
+      const fx = this.rallyX * 2 - tm.startX, fz = this.rallyZ * 2 - tm.startZ; // a step beyond the rally point, toward the enemy
+      if (this.have('c_camp') < (g.snow > 0.3 ? 3 : 1) + (P.expand > 2 ? 1 : 0) && req('c_camp', fx, fz, 380)) return;
+      if (this.have('c_post') < 1 && req('c_post', fx, fz, 420)) return;
+      if (tm.tech.has('t_fpv') && !this.have('dronehub') && this.have('c_drone') < 1 && req('c_drone', tm.startX, tm.startZ, 420)) return;
+    }
     // research and the high end of the ladder
     if (!prime || secs > 200) {
       if (!this.have('lab') && secs > 150 && tm.incM > 6 && tm.incE > 90 && this.tryBuild(b, 'lab', undefined, undefined, 5, 26)) return;
@@ -278,16 +308,16 @@ export class AI {
         break;
       case 'motorpool':
         if (cons < wantCons && cons >= 2 && army > cons * 3) id = 'dozer';
-        else id = pick([['scout', this.have('scout') < 2 ? 1.5 : 0.1], ['ifv', 2.5], ['tank', 4.5], ['spg', 1.2 + this.enemyDef * 0.5], ['spaa', this.enemyAir > 1 ? 0.6 + this.enemyAir * 0.3 : 0.1]]);
+        else id = pick([['scout', this.have('scout') < 2 ? 1.5 : 0.1], ['ifv', 2.5], ['tank', 4.5], ['spg', 1.2 + this.enemyDef * 0.5], ['caesar', 1.6 + this.enemyDef * 0.4], ['spaa', this.enemyAir > 1 ? 0.6 + this.enemyAir * 0.3 : 0.1]]);
         break;
       case 'airfield':
-        id = pick([['recon', this.have('recon') < 1 ? 1.5 : 0], ['fighter', 0.4 + this.enemyAir * 0.5], ['cas', 2.2], ['tb2', 1.5], ['heli', secs > 600 ? 2 : 0.3]]);
+        id = pick([['recon', this.have('recon') < 1 ? 1.5 : 0], ['fighter', 0.4 + this.enemyAir * 0.5], ['cas', 2.2], ['f16', 2.4 + this.enemyAir * 0.3], ['tb2', 1.5], ['heli', secs > 600 ? 2 : 0.3]]);
         break;
       case 'dronehub':
-        id = pick([['fpv', this.have('fpv') < 10 + P.heavy * 6 ? 3 : 0], ['loiter', 2.5], ['ucav', tm.incM > 20 ? 2.5 : 0.5]]);
+        id = pick([['fpv', this.have('fpv') < 10 + P.heavy * 6 ? 3 : 0], ['sting', this.enemyAir > 1 && this.have('sting') < 4 + this.enemyAir ? 1 + this.enemyAir * 0.5 : 0], ['lancet', this.have('lancet') < 8 ? 2.5 : 0], ['loiter', 2.5], ['ucav', tm.incM > 20 ? 2.5 : 0.5]]);
         break;
       case 'heavy':
-        id = pick([['hifv', 3], ['mbt', 3], ['mlrs', 1.2 + this.enemyDef * 0.3]]);
+        id = pick([['hifv', 3], ['mbt', 3], ['mlrs', 1.2 + this.enemyDef * 0.3], ['tos', 1.6 + this.enemyDef * 0.3]]);
         break;
     }
     if (id) f.queue.push(DEFS[id]);
@@ -297,14 +327,16 @@ export class AI {
   // ─────────────── research ───────────────
   private research() {
     const g = this.game, tm = this.team, P = this.P;
-    const order = ['t_fpv', 't_armor', 't_rail', 't_iads', 't_loiter', 't_ew', 't_strike', 't_ucav', 't_space'];
-    const max = [3, 6, 9, 9][tm.level];
+    const order = ['t_fpv', 't_armor', 't_rail', 't_iads', tm.fac ? 't_heavy' : 't_west', 't_loiter', 't_ew', 't_strike', 't_ucav', 't_space'];
+    const bridging = TECHS.t_bridge, down = g.map.bridges.some(b => b.dead);
+    const max = [3, 7, 10, 10][tm.level];
     for (const l of this.labs) {
       if (l.resQ.length) continue;
       if (l.def.lab === 'pad') {
         for (const id of ['sat_recon', 'sat_gps']) { const t = TECHS[id]; if (g.canResearch(tm, t) && !g.researching(tm, t) && tm.incM > 18) { l.resQ.push(t); break; } }
         continue;
       }
+      if (down && (this.cutOff || tm.level >= 2) && g.canResearch(tm, bridging) && !g.researching(tm, bridging)) { l.resQ.push(bridging); continue; }
       for (let i = 0; i < max; i++) {
         const t = TECHS[order[i]];
         if (!g.canResearch(tm, t) || g.researching(tm, t)) continue;
@@ -351,11 +383,30 @@ export class AI {
     // defend
     const al = tm.alerts[tm.alerts.length - 1];
     if (al && t - al.tick < 4 * TICK && t - this.lastDefend > 4 * TICK && (al.b || dist(al.x, al.z, tm.startX, tm.startZ) < 380)) {
-      this.lastDefend = t;
+      this.lastDefend = t; this.pressure += 1;
       const ds: Unit[] = [];
       for (const u of this.pool) if (!this.scouts.has(u) && dist(u.x, u.z, al.x, al.z) < 700) ds.push(u);
       if (ds.length) g.moveGroup(ds, al.x, al.z, 'fight', false);
       for (const p of this.planes) if (p.def.id === 'fighter' && dist(p.x, p.z, al.x, al.z) < 800) g.give(p, { type: 'fight', x: al.x, z: al.z });
+    }
+    // losing the fight at home: drop the bridge the enemy is coming over
+    if (tm.level >= 1 && this.pressure > 5 && t - this.lastCut > 90 * TICK && this.str(this.pool) < 900) {
+      const en = this.pickEnemy(tm.startX, tm.startZ);
+      let tgt: Unit | null = null, bs = 1e9;
+      if (en) for (const u of g.units) {
+        if (!u.def.neutral || u.dead) continue;
+        const dh = dist(u.x, u.z, tm.startX, tm.startZ), de = dist(u.x, u.z, en.startX, en.startZ);
+        if (dh < de && dh + de < bs && dh > 120) { bs = dh + de; tgt = u; } // on our side of the midpoint, on their road in
+      }
+      if (tgt) {
+        let n = 0;
+        for (const u of g.units) {
+          if (u.team !== tm || u.dead || !u.built) continue;
+          const id = u.def.id, far = dist(u.x, u.z, tgt.x, tgt.z);
+          if (id === 'cas' || id === 'tb2' || id === 'ucav' || id === 'loiter' || (id === 'spg' || id === 'mlrs' || id === 'howitzer') && far < 520 || (id === 'tank' || id === 'mbt') && far < 260 && this.pool.has(u)) { g.give(u, { type: 'attack', target: tgt, x: tgt.x, z: tgt.z }); n++; }
+        }
+        if (n) { this.lastCut = t; this.pressure = 0; }
+      }
     }
     // scouting
     if (t - this.lastScout > 50 * TICK) {
@@ -439,7 +490,11 @@ export class AI {
           const a = this.rng() * 6.283;
           g.give(p, { type: 'patrol', x: tm.startX + Math.cos(a) * 170, z: tm.startZ + Math.sin(a) * 170, x2: tm.startX - Math.cos(a) * 170, z2: tm.startZ - Math.sin(a) * 170 });
         } else if (p.def.id === 'cas' && dist(p.x, p.z, tm.startX, tm.startZ) < 260) bombers.push(p);
-        else if (p.def.id === 'tb2' || p.def.id === 'ucav') {
+        else if (p.def.id === 'f16') {
+          const tg = this.rng() < 0.5 ? this.pickTarget(p.x, p.z, null) : null;
+          if (tg) { g.give(p, { type: 'fight', x: tg.x, z: tg.z }); g.give(p, { type: 'move', x: tm.startX, z: tm.startZ }, true); }
+          else { const a = this.rng() * 6.283; g.give(p, { type: 'patrol', x: tm.startX + Math.cos(a) * 200, z: tm.startZ + Math.sin(a) * 200, x2: tm.startX - Math.cos(a) * 200, z2: tm.startZ - Math.sin(a) * 200 }); }
+        } else if (p.def.id === 'tb2' || p.def.id === 'ucav') {
           const tg = this.pickTarget(p.x, p.z, null);
           if (tg) { g.give(p, { type: 'fight', x: tg.x, z: tg.z }); g.give(p, { type: 'move', x: tm.startX, z: tm.startZ }, true); }
         }

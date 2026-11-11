@@ -40,13 +40,17 @@ export interface UnitDef {
   /** research facility: 'lab' researches technologies, 'pad' launches satellites */
   lab: '' | 'lab' | 'pad';
   /** one-way attack munition: detonates on its target. b: prefers structures */
-  kami: { r: number; d: number; b?: boolean } | null;
+  kami: { r: number; d: number; b?: boolean; v?: boolean } | null;
   /** susceptibility to electronic warfare (fraction of hp lost per second inside a jammer's bubble) */
   ew: number;
   /** electronic warfare radius */
   jam: number;
   /** requisition: civilian building kinds this can be set up in (it sits on the roof instead of being built) */
   reuse: number[] | null;
+  /** faction that fields this (-1 both, 0 Ukraine, 1 Russia) */
+  fac: number;
+  /** built across a destroyed bridge to reopen the crossing */
+  span: boolean;
   /** belongs to nobody: never auto-targeted, damaged by everyone (bridges) */
   neutral: boolean;
   /** wheeled: bogs down badly off-road in mud */
@@ -54,7 +58,7 @@ export interface UnitDef {
   model: Model;
 }
 
-export interface TechDef { id: string; name: string; desc: string; m: number; e: number; work: number; req: string[]; at: 'lab' | 'pad'; sat?: number }
+export interface TechDef { id: string; name: string; desc: string; m: number; e: number; work: number; req: string[]; at: 'lab' | 'pad'; sat?: number; fac?: number }
 
 const H = Math.PI / 2;
 const B = (w: number, h: number, l: number, x: number, y: number, z: number, c: string, g?: string, r?: number[]): Part =>
@@ -134,7 +138,7 @@ const base = {
   tier: 1, speed: 0, turn: 0, r: 4, h: 5, fw: 1, fh: 1, sight: 150, radar: 0, bp: 0, buildRange: 42,
   builds: [] as string[], factory: false, mkM: 0, mkE: 0, useE: 0, stM: 0, stE: 0, extract: 0, wind: 0, conv: 0,
   weapons: [] as WeaponDef[], alt: 0, hover: false, blast: null, commander: false, bot: false, noChase: false, naval: false, water: false,
-  inf: false, req: '', lab: '' as const, kami: null, ew: 0, jam: 0, wheel: false, reuse: null, neutral: false,
+  inf: false, req: '', lab: '' as const, kami: null, ew: 0, jam: 0, wheel: false, reuse: null, neutral: false, span: false, fac: -1,
 };
 export const DEFS: Record<string, UnitDef> = {};
 export const DEF_LIST: UnitDef[] = [];
@@ -148,7 +152,7 @@ export const nm = (d: UnitDef, fac: number) => (d.names ? d.names[fac] : d.name)
 
 const HQ_BUILD = ['depot', 'gen', 'wind', 'estore', 'mstore', 'barracks', 'motorpool', 'airfield', 'lab', 'bunker', 'aagun', 'radar', 'c_camp', 'c_drone', 'c_post'];
 const ENG_BUILD = ['depot', 'railhub', 'gen', 'wind', 'plant', 'estore', 'mstore', 'converter', 'barracks', 'motorpool', 'airfield', 'dronehub', 'heavy', 'lab',
-  'bunker', 'howitzer', 'aagun', 'sam', 'radar', 'ew', 'strike', 'pad', 'c_camp', 'c_drone', 'c_post'];
+  'bunker', 'howitzer', 'aagun', 'sam', 'radar', 'ew', 'strike', 'pad', 'pontoon', 'c_camp', 'c_drone', 'c_post'];
 
 // tracer / shell tints
 const TR = 0xffd9a0, SHELL = 0xffb060, SAMC = 0xfff0c0;
@@ -157,7 +161,7 @@ const TR = 0xffd9a0, SHELL = 0xffb060, SAMC = 0xfff0c0;
 U({
   id: 'hq', wheel: true, name: 'Zelensky', names: ['Zelensky — Command Post', 'Putin — Command Post'],
   desc: 'The president’s mobile command post. Directs construction of your base. If it is lost, the war is lost.', cls: 'ground',
-  hp: 3400, m: 2500, e: 25000, work: 20000, speed: 13, turn: 2.2, r: 5.6, h: 7.5, sight: 220,
+  hp: 6500, m: 2500, e: 25000, work: 20000, speed: 13, turn: 2.2, r: 5.6, h: 7.5, sight: 220,
   bp: 30, buildRange: 58, builds: HQ_BUILD, mkM: 1.5, mkE: 30, stM: 1000, stE: 1000,
   commander: true, noChase: true, blast: { r: 34, d: 300 },
   weapons: [{ k: 'gun', range: 140, reload: 0.22, dmg: 16, tg: 3, color: TR }],
@@ -268,13 +272,13 @@ U({
 U({
   id: 'motorpool', name: 'Motor Pool', desc: 'Fields vehicles: scout cars, IFVs, tanks, artillery and mobile air defence.', cls: 'building',
   hp: 3000, m: 680, e: 1300, work: 1400, fw: 5, fh: 5, h: 11, bp: 20, factory: true, sight: 110,
-  builds: ['dozer', 'scout', 'ifv', 'tank', 'spg', 'spaa'],
+  builds: ['dozer', 'scout', 'ifv', 'tank', 'spg', 'caesar', 'spaa'],
   model: { parts: [...yard(39, 'N'), B(6, 2.4, 6, 12, 11, -14, 'M'), C(0.5, 0.5, 4, 14, 13.6, -16, 'K'), TZ(1.6, 7, -15.4, 2.2, 12, 'L'), B(0.12, 1.4, 2.2, -19.56, 6, 8, 'G')] },
 });
 U({
   id: 'airfield', name: 'Airfield', desc: 'Operates drones, helicopters and jets.', cls: 'building',
   hp: 2300, m: 800, e: 1600, work: 1600, fw: 5, fh: 5, h: 10, bp: 20, factory: true, sight: 130,
-  builds: ['recon', 'tb2', 'heli', 'fighter', 'cas'],
+  builds: ['recon', 'tb2', 'heli', 'fighter', 'cas', 'f16'],
   model: {
     sp: [-15, 13.4, -15], sa: 'y', ss: 1.6,
     parts: [B(39, 0.5, 39, 0, 0.25, 0, 'D'), B(12, 0.1, 38, 3, 0.56, 0, 'K'),
@@ -288,7 +292,7 @@ U({
 U({
   id: 'dronehub', name: 'Drone Workshop', desc: 'Assembles FPV drones, long-range strike drones and jet UCAVs.', cls: 'building', req: 't_fpv',
   hp: 1700, m: 520, e: 2600, work: 1500, fw: 4, fh: 4, h: 9, bp: 22, factory: true, sight: 120,
-  builds: ['fpv', 'loiter', 'ucav'],
+  builds: ['fpv', 'sting', 'lancet', 'loiter', 'ucav'],
   model: {
     sp: [9, 9.5, -10], sa: 'y', ss: 0.8,
     parts: [B(31, 0.5, 31, 0, 0.25, 0, 'D'), B(2.6, 2.8, 12, -11, 1.9, -6, 'T'), B(2.6, 2.8, 12, -7.6, 1.9, -6, 'C'), B(2.6, 2.8, 12, -9.3, 4.7, -6, 'D'),
@@ -301,7 +305,7 @@ U({
 U({
   id: 'heavy', name: 'Armour Depot', names: ['Armour Depot', 'Tank Plant'], desc: 'Fields modern heavy armour and rocket artillery.', cls: 'building', tier: 2, req: 't_armor',
   hp: 5000, m: 2600, e: 6000, work: 4200, fw: 6, fh: 6, h: 14, bp: 40, factory: true, sight: 120,
-  builds: ['mbt', 'hifv', 'mlrs'],
+  builds: ['mbt', 'hifv', 'mlrs', 'tos'],
   model: { parts: [...yard(47, 'N'), C(1.2, 1.6, 9, -19, 13.6, -19, 'L'), C(1.2, 1.6, 9, 19, 13.6, -19, 'L'), C(1.3, 1.3, 1, -19, 17, -19, 'R'), C(1.3, 1.3, 1, 19, 17, -19, 'R'),
     B(0.8, 12, 0.8, -15, 6.6, 20, 'Y'), B(0.8, 12, 0.8, 15, 6.6, 20, 'Y'), B(31, 1.2, 1.4, 0, 12.6, 20, 'Y'), B(2.4, 2, 2.4, 5, 11, 20, 'D'), B(0.12, 1.4, 2.2, -23.56, 6, 10, 'G')] },
 });
@@ -416,6 +420,13 @@ U({
   id: 'bridge', name: 'Bridge', desc: 'A river crossing. If it is brought down, vehicles cannot cross here; infantry can still wade the river, slowly.', cls: 'building', neutral: true,
   hp: 5200, m: 0, e: 0, work: 1, fw: 3, fh: 3, h: 3, sight: 1,
   model: { parts: [] },
+});
+
+U({
+  id: 'pontoon', name: 'Pontoon Bridge', names: ['PMP Pontoon Bridge', 'PMP Pontoon Bridge'], desc: 'Floating military bridge laid where a bridge has been destroyed. Reopens the crossing to vehicles. Weaker than the original.', cls: 'building', span: true, tier: 2, req: 't_bridge',
+  hp: 2600, m: 520, e: 3000, work: 2200, fw: 3, fh: 3, h: 3, sight: 60,
+  model: { parts: [B(64, 0.5, 9, 0, 0.9, 0, 'T'), B(64, 0.3, 0.5, 0, 1.4, 4.4, 'C'), B(64, 0.3, 0.5, 0, 1.4, -4.4, 'C'),
+    ...[-28, -20, -12, -4, 4, 12, 20, 28].map(x => B(6.4, 1.3, 13, x, 0, 0, 'C'))] },
 });
 
 // ───────────────────────── Infantry ─────────────────────────
@@ -622,21 +633,74 @@ U({
     B(1.6, 1.4, 1.6, 0, 4, -2.2, 'D', 't')] },
 });
 
+// ───────────────────────── Faction-exclusive advanced weapons ─────────────────────────
+// Ukraine fields precise, mobile Western systems and improvised interceptors; Russia fields mass, thermobarics and hypersonics.
+U({
+  id: 'caesar', name: 'CAESAR', desc: 'Truck-mounted 155 mm howitzer. Very long range, accurate, fast on roads — and thin-skinned.', cls: 'ground', fac: 0, tier: 2, req: 't_west', wheel: true,
+  hp: 520, m: 330, e: 4200, work: 1300, speed: 27, turn: 2, r: 4.8, h: 6.6, sight: 190,
+  weapons: [{ k: 'cannon', range: 440, min: 100, reload: 3, dmg: 240, splash: 30, speed: 210, arc: 0.34, spread: 0.02, tg: 1, color: SHELL, turn: 1.8 }],
+  model: { tp: [0, 3.6, -3], parts: [...wheels(2.2, [-4.4, -1.8, 4.2], 1.2, 1), B(4.2, 1.1, 12.4, 0, 2.5, 0, 'D'), B(4.4, 2.6, 3.4, 0, 4.1, 4.4, 'T'), B(4.2, 1, 0.2, 0, 4.7, 6.15, 'P'),
+    B(0.1, 0.8, 1.4, -2.22, 3.6, 4.4, 'G'), B(0.1, 0.8, 1.4, 2.22, 3.6, 4.4, 'G'), B(3.4, 1.6, 3.6, 0, 3.9, -3, 'T', 't'), C(0.26, 0.32, 10.4, 0, 6.6, 1.4, 'D', 't', [1.15, 0, 0]), C(0.44, 0.44, 1, 0, 8.7, 6, 'D', 't', [1.15, 0, 0]),
+    B(0.6, 0.5, 4, -1.9, 1.6, -5.4, 'D', 't', [0.3, 0.3, 0]), B(0.6, 0.5, 4, 1.9, 1.6, -5.4, 'D', 't', [0.3, -0.3, 0])] },
+});
+U({
+  id: 'f16', name: 'F-16AM', desc: 'Multirole fighter. Shoots down aircraft and missiles and drops guided bombs on ground targets.', cls: 'air', fac: 0, tier: 2, req: 't_west',
+  hp: 460, m: 330, e: 6800, work: 1700, speed: 90, turn: 2.2, r: 4.2, h: 2, alt: 74, sight: 280,
+  weapons: [{ k: 'missile', range: 215, reload: 1.1, dmg: 84, speed: 400, tg: 2, color: SAMC, free: true },
+    { k: 'missile', range: 175, reload: 5, dmg: 320, splash: 22, speed: 260, tg: 1, color: 0xffa060, free: true }],
+  model: { parts: [...jet('L', false), B(3, 0.2, 5, 0, 0.05, 1.2, 'L'), TZ(0.14, 2.4, -4.6, 0, -1, 'W'), TZ(0.14, 2.4, 4.6, 0, -1, 'W'), TZ(0.34, 2.4, -2.4, -0.45, -0.4, 'D'), TZ(0.34, 2.4, 2.4, -0.45, -0.4, 'D'), TZ(0.5, 3.4, 0, -0.75, -0.4, 'M')] },
+});
+U({
+  id: 'sting', name: 'Sting Interceptor', desc: 'Cheap interceptor drone that rams enemy drones, helicopters and cruise missiles out of the sky.', cls: 'air', fac: 0, req: 't_ew',
+  hp: 40, m: 30, e: 500, work: 170, speed: 96, turn: 4.2, r: 1.4, h: 1, alt: 30, hover: true, sight: 240, ew: 0.3,
+  kami: { r: 10, d: 230 },
+  weapons: [{ k: 'ram', range: 300, reload: 1, dmg: 230, splash: 10, tg: 2, color: SHELL, free: true }],
+  model: { parts: [C(0.3, 0.42, 1.6, 0, 0.4, 0, 'L'), S(0.3, 0, 1.2, 0, 'K'), B(2.4, 0.1, 0.18, 0, 0, 0, 'K', undefined, [0, 0.785, 0]), B(2.4, 0.1, 0.18, 0, 0, 0, 'K', undefined, [0, -0.785, 0]),
+    C(0.5, 0.5, 0.05, -0.85, 0.16, 0.85, 'D'), C(0.5, 0.5, 0.05, 0.85, 0.16, 0.85, 'D'), C(0.5, 0.5, 0.05, -0.85, 0.16, -0.85, 'D'), C(0.5, 0.5, 0.05, 0.85, 0.16, -0.85, 'D')] },
+});
+U({
+  id: 'tos', name: 'TOS-1A Solntsepyok', desc: 'Thermobaric rocket launcher on a tank hull. Short range; turns a whole block into fire.', cls: 'ground', fac: 1, tier: 2, req: 't_heavy',
+  hp: 2400, m: 620, e: 8600, work: 2600, speed: 15, turn: 1.7, r: 5.2, h: 7.4, sight: 200,
+  weapons: [{ k: 'missile', range: 215, min: 60, reload: 11, dmg: 150, splash: 36, burst: 8, gap: 0.16, speed: 190, tg: 1, color: 0xff8040, free: true }],
+  model: { tp: [0, 3.6, -0.4], parts: [...tracks(6.8, 11.4, 1.7), B(5.8, 1.5, 11, 0, 2.4, 0, 'T'), B(5.8, 0.9, 3.2, 0, 2.8, 4.4, 'C', undefined, [0.42, 0, 0]),
+    B(0.1, 0.8, 1.5, -2.92, 2.5, 1, 'G'), B(0.1, 0.8, 1.5, 2.92, 2.5, 1, 'G'), C(1.8, 2.2, 0.9, 0, 3.7, -0.4, 'D', 't'),
+    B(5, 3, 6.4, 0, 6, -0.6, 'T', 't', [-0.32, 0, 0]),
+    ...[-1.8, -0.6, 0.6, 1.8].flatMap(x => [B(1, 0.9, 0.2, x, 7.9, 2.2, 'K', 't', [-0.32, 0, 0]), B(1, 0.9, 0.2, x, 6.8, 2.56, 'K', 't', [-0.32, 0, 0]), B(1, 0.9, 0.2, x, 5.7, 2.92, 'K', 't', [-0.32, 0, 0])])] },
+});
+U({
+  id: 'lancet', name: 'Lancet-3', desc: 'Loitering munition that hunts vehicles and guns. Fast, precise, hard to jam.', cls: 'air', fac: 1, req: 't_loiter',
+  hp: 60, m: 70, e: 1500, work: 330, speed: 64, turn: 2.4, r: 2.2, h: 1.2, alt: 40, sight: 260, ew: 0.05,
+  kami: { r: 11, d: 560, v: true },
+  weapons: [{ k: 'ram', range: 260, reload: 1, dmg: 560, splash: 11, tg: 1, color: SHELL, free: true }],
+  model: { sp: [0, 0, -2], sa: 'z', ss: 34, parts: [TZ(0.3, 3.6, 0, 0, 0, 'L'), K(0.3, 0.9, 0, 0, 2.2, 'K', undefined, [H, 0, 0]),
+    B(2.6, 0.08, 0.5, 0, 0, 0.9, 'L', undefined, [0, 0, 0.785]), B(2.6, 0.08, 0.5, 0, 0, 0.9, 'L', undefined, [0, 0, -0.785]),
+    B(1.6, 0.08, 0.4, 0, 0, -1.2, 'L', undefined, [0, 0, 0.785]), B(1.6, 0.08, 0.4, 0, 0, -1.2, 'L', undefined, [0, 0, -0.785]), B(1.2, 0.08, 0.16, 0, 0, 0, 'K', 's')] },
+});
+U({
+  id: 'hyper', name: 'Kinzhal', names: ['Kinzhal', 'Kh-47M2 Kinzhal'], desc: 'Hypersonic missile in flight. Only the best air defence has a chance against it.', cls: 'air', tier: 3, fac: 1,
+  hp: 900, m: 0, e: 0, work: 1, speed: 380, turn: 1.6, r: 2.8, h: 1.2, alt: 150, sight: 60,
+  kami: { r: 62, d: 2100, b: true },
+  model: { parts: [TZ(0.6, 7.4, 0, 0, 0, 'M'), K(0.6, 2.6, 0, 0, 5, 'D', undefined, [H, 0, 0]), B(2.4, 0.12, 1.4, 0, 0, -3, 'M'), B(0.12, 2.4, 1.4, 0, 0, -3, 'M'), TZ(0.5, 0.4, 0, 0, -3.9, 'K')] },
+});
+
 // ───────────────────────── Technology ladder ─────────────────────────
 export const TECHS: Record<string, TechDef> = {};
 export const TECH_LIST: TechDef[] = [];
 const T = (id: string, name: string, desc: string, m: number, e: number, work: number, req: string[] = [], at: 'lab' | 'pad' = 'lab', sat = 0) => {
-  const t = { id, name, desc, m, e, work, req, at, sat }; TECHS[id] = t; TECH_LIST.push(t);
+  const t: TechDef = { id, name, desc, m, e, work, req, at, sat }; TECHS[id] = t; TECH_LIST.push(t); return t;
 };
 T('t_fpv', 'FPV Drone Warfare', 'Unlocks the Drone Workshop and FPV kamikaze drones.', 350, 4000, 1400);
 T('t_rail', 'Rail Logistics', 'Unlocks Rail Terminals (4× supplies) and the Thermal Power Plant.', 500, 5000, 1800);
 T('t_armor', 'Modern Armour', 'Unlocks the Armour Depot: modern tanks, heavy IFVs and rocket artillery.', 600, 6000, 2200);
+T('t_bridge', 'Military Bridging', 'Engineers can lay a pontoon bridge where a bridge has been destroyed, reopening the crossing to vehicles.', 400, 4000, 1500);
 T('t_iads', 'Integrated Air Defence', 'Unlocks long-range SAM batteries that intercept aircraft, drones and missiles.', 800, 9000, 2800);
 T('t_ew', 'Electronic Warfare', 'Unlocks EW Stations that jam enemy drones out of the sky.', 500, 7000, 2200, ['t_fpv']);
 T('t_loiter', 'Long-Range Strike Drones', 'Unlocks one-way attack drones that hunt structures deep behind the front.', 700, 9000, 2800, ['t_fpv']);
 T('t_strike', 'Precision Strike', 'Unlocks cruise-missile launchers with map-wide reach.', 1500, 18000, 4500, ['t_armor']);
 T('t_ucav', 'Supersonic Combat Drones', 'Unlocks jet-powered supersonic UCAVs.', 2200, 26000, 6000, ['t_loiter', 't_iads']);
 T('t_space', 'Space Programme', 'Unlocks the Launch Complex for orbital launches.', 3000, 34000, 7500, ['t_strike', 't_ucav']);
+T('t_west', 'Western Arms Packages', 'Ukraine only. Unlocks the CAESAR truck howitzer and the F-16 multirole fighter.', 1200, 14000, 3600, ['t_armor']).fac = 0;
+T('t_heavy', 'Thermobaric & Hypersonic Arms', 'Russia only. Unlocks the TOS-1A thermobaric launcher and arms cruise-missile batteries with Kinzhal hypersonic missiles.', 1200, 14000, 3600, ['t_armor']).fac = 1;
 T('sat_recon', 'Launch Recon Satellite', 'Orbital imaging: the whole map is revealed on radar and every enemy structure is spotted.', 2500, 30000, 6500, [], 'pad', 1);
 T('sat_gps', 'Launch Guidance Satellite', 'Satellite navigation: artillery and rocket dispersion is cut by 60%.', 3000, 36000, 7500, ['sat_recon'], 'pad', 2);
 

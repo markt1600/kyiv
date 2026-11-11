@@ -25,6 +25,10 @@ export interface Body { id: number; x: number; y: number; z: number; rot: number
 /** civilians live in the city's districts; they run for shelter when the shelling starts */
 export interface Civilian { id: number; x: number; z: number; h: number; tx: number; tz: number; wait: number; flee: number; d: number; dead: boolean; moving: boolean }
 export const SUPPLY_R = 300;
+/** supplies per second Ukraine receives while every civilian is alive */
+export const AID = 1.5;
+/** opening forces: Ukraine's territorial defence with anti-tank teams; Russia's armoured spearhead */
+const OPENING = [['rifle', 'rifle', 'rifle', 'rifle', 'atgm', 'atgm', 'atgm', 'manpad'], ['tank', 'tank', 'ifv', 'rifle', 'rifle', 'rifle', 'rifle', 'spaa']];
 export interface GameEvent { t: 'beam' | 'muzzle' | 'boom' | 'die' | 'built' | 'alert' | 'tech' | 'launch' | 'collapse' | 'civ' | 'season'; x: number; y: number; z: number; tx?: number; ty?: number; tz?: number; c?: number; size?: number; big?: boolean; u?: Unit; k?: string; team?: Team; tech?: TechDef; civ?: Civ }
 
 export class Team {
@@ -127,6 +131,15 @@ export class Game {
     });
     this.neutral = new Team(2, 99, false, 0, opts.n);
     this.map.bridges.forEach((b, i) => { const u = this.spawn(DEFS.bridge, this.neutral, b.x, b.z, true); u.y = u.py = this.map.waterY + 3.4; u.cx = i; });
+    // Russia opens with the armoured column that crossed the border; Ukraine opens with its city, its people and the aid they bring
+    this.teams.forEach((tm, ti) => {
+      const en = this.teams[1 - ti]; if (!en) return;
+      const dx = en.startX - tm.startX, dz = en.startZ - tm.startZ, l = Math.hypot(dx, dz) || 1, fx = dx / l, fz = dz / l;
+      OPENING[ti].forEach((id, i) => {
+        const row = Math.floor(i / 4), col = i % 4 - 1.5, u = this.spawn(DEFS[id], tm, tm.startX + fx * (46 + row * 12) - fz * col * 10, tm.startZ + fz * (46 + row * 12) + fx * col * 10, true);
+        u.heading = u.turret = Math.atan2(fx, fz);
+      });
+    });
     this.spawnCivilians();
     this.updateSeason(); this.rebuildGrid(); this.updateSupply(); this.updateVision();
   }
@@ -222,6 +235,7 @@ export class Game {
   }
   canPlace(def: UnitDef, cx: number, cz: number, team: Team): boolean {
     const m = this.map, n = m.n;
+    if (def.span) { const b = m.bridges[cx]; return cz === 0 && !!b && b.dead; }
     if (def.reuse) { const c = this.civFor(def, cx, cz); return !!c; }
     if (def.cls !== 'building') return m.cellPass(cx + 1, cz + 1, 0);
     let upgrade = false;
@@ -261,6 +275,12 @@ export class Game {
   }
   placeBuilding(def: UnitDef, team: Team, cx: number, cz: number, built: boolean): Unit {
     const m = this.map;
+    if (def.span) {
+      const b = m.bridges[cx], u = this.spawn(def, team, b.x, b.z, built);
+      u.cx = cx; u.cz = 0; u.heading = u.ph = u.turret = b.ang; u.y = u.py = m.waterY + 0.4;
+      this.occ.set(cx, u);
+      return u;
+    }
     if (def.reuse) {
       const c = this.civFor(def, cx, cz)!;
       const u = this.spawn(def, team, c.x, c.z, built);
@@ -293,7 +313,7 @@ export class Game {
   }
   clearOrders(u: Unit) { u.orders.length = 0; this.stop(u); u.engageT = null; u.homeX = u.x; u.homeZ = u.z; }
   giveBuild(u: Unit, def: UnitDef, cx: number, cz: number, queue = false) {
-    const c = def.reuse ? this.civFor(def, cx, cz) : null;
+    const c = def.span ? this.map.bridges[cx] : def.reuse ? this.civFor(def, cx, cz) : null;
     this.give(u, { type: 'build', def, cx, cz, x: c ? c.x : (cx + def.fw / 2) * CELL, z: c ? c.z : (cz + def.fh / 2) * CELL }, queue);
   }
   moveGroup(us: Unit[], x: number, z: number, type: 'move' | 'fight' | 'patrol', queue: boolean) {
@@ -348,6 +368,7 @@ export class Game {
       let s = d * (o.def.weapons.length ? 1 : 1.7) * (o.built ? 1 : 1.3);
       if (bld) s = d * (o.def.reuse ? 3 : 1) / (1 + o.def.m / 600) * (0.6 + this.rng() * 0.8);
       else if (pb && o.def.cls !== 'building') s *= 5;
+      else if (u.def.kami && u.def.kami.v && (o.def.inf || o.def.cls === 'building' && !o.def.weapons.length)) s *= 4;
       if (o.def.kami && o.def.id !== 'fpv') s *= 0.5; // incoming munitions first
       if (s < bs) { bs = s; best = o; }
     }
@@ -395,7 +416,7 @@ export class Game {
       tm.lowPower = tm.energy < up;
       if (!tm.lowPower) tm.energy -= up;
       // Ukraine receives aid for as long as its people survive; killing civilians costs either side its backers
-      tm.aid = tm.fac === 0 && this.civTotal ? 2.5 * this.civAlive / this.civTotal : 0;
+      tm.aid = tm.fac === 0 && this.civTotal ? AID * this.civAlive / this.civTotal : 0;
       tm.pM = (tm.pM + tm.aid) * (1 - Math.min(0.4, tm.condemn * 0.015));
       tm.metal += tm.pM * tm.mult * DT;
       tm.stats.metal += tm.pM * tm.mult * DT;
@@ -491,12 +512,22 @@ export class Game {
       target.progress = 1; target.built = true; target.team.stats.built++;
       target.homeX = target.x; target.homeZ = target.z;
       this.events.push({ t: 'built', x: target.x, y: target.y, z: target.z, u: target });
+      if (d.span) this.finishSpan(target);
     }
   }
 
+  /** the pontoons are in: the crossing is open again, held by a (weaker) neutral bridge */
+  private finishSpan(u: Unit) {
+    const m = this.map, i = u.cx, b = m.bridges[i];
+    this.kill(u, null, true);
+    if (!b || !b.dead) return;
+    m.raiseBridge(b); this.craters.push({ x: b.x, z: b.z, r: b.len / 2 + 34 });
+    const n = this.spawn(DEFS.bridge, this.neutral, b.x, b.z, true); n.y = n.py = m.waterY + 3.4; n.cx = i; n.hp = 2600;
+    for (const o of this.units) if (o.path) o.path = null;
+  }
   /** can this side build `def` yet? */
-  unlocked(team: Team, def: UnitDef) { return !def.req || team.tech.has(def.req); }
-  canResearch(team: Team, t: TechDef) { return !team.tech.has(t.id) && t.req.every(r => team.tech.has(r)); }
+  unlocked(team: Team, def: UnitDef) { return (def.fac < 0 || def.fac === team.fac) && (!def.req || team.tech.has(def.req)); }
+  canResearch(team: Team, t: TechDef) { return (t.fac === undefined || t.fac === team.fac) && !team.tech.has(t.id) && t.req.every(r => team.tech.has(r)); }
   /** is someone on this side already working on (or queued for) this technology? */
   researching(team: Team, t: TechDef) { for (const u of this.units) if (u.team === team && !u.dead && u.resQ.includes(t)) return true; return false; }
   private updateLab(u: Unit) {
@@ -675,7 +706,7 @@ export class Game {
         const def = o.def!;
         if (!d.bp) { this.shift(u); break; }
         let t = o.target;
-        const reach = d.buildRange + def.r;
+        const reach = d.buildRange + def.r + (def.span ? this.map.bridges[o.cx!].len / 2 : 0);
         if (!t) {
           if (!this.approach(u, o, o.x, o.z, reach)) break;
           const ex = def.cls === 'building' ? this.occ.get(o.cz! * this.map.n + o.cx!) : undefined;
@@ -892,7 +923,7 @@ export class Game {
         if (u.dead || u.burnTick === this.tick || u.def.cls === 'air' || u.def.neutral || u.inFactory) continue;
         if (u.def.cls === 'building') {
           if (cx < u.cx || cz < u.cz || cx >= u.cx + u.def.fw || cz >= u.cz + u.def.fh) continue;
-          if (u.def.reuse) continue;
+          if (u.def.reuse || u.def.span) continue;
           u.burnTick = this.tick; this.damage(u, 8 * STEP + u.def.hp * 0.004 * STEP, null);
         } else if (Math.abs(u.x - (cx + 0.5) * CELL) < CELL * 0.75 && Math.abs(u.z - (cz + 0.5) * CELL) < CELL * 0.75) {
           u.burnTick = this.tick; this.damage(u, 11 * STEP, null);
@@ -967,7 +998,7 @@ export class Game {
         this.damage(t, w.dmg, u);
         break;
       case 'launch': {
-        const m = this.spawn(DEFS[w.spawn!], u.team, u.x, u.z, true);
+        const m = this.spawn(DEFS[u.team.tech.has('t_heavy') ? 'hyper' : w.spawn!], u.team, u.x, u.z, true);
         m.y = m.py = u.y + d.h; m.heading = m.ph = u.turret; m.orders.push({ type: 'dive', x: t.x, z: t.z });
         this.events.push({ t: 'muzzle', x: u.x, y: u.y + d.h, z: u.z, c: w.color, size: 3, k: 'launch' });
         break;
@@ -1043,7 +1074,7 @@ export class Game {
     this.events.push({ t: 'boom', x, y, z, size: sp ? sp * 0.5 : 4 + dmg * 0.02, c: color });
     const ground = y < this.map.groundY(x, z) + 14;
     if (ground) {
-      this.igniteArea(x, z, sp ? sp * 0.55 : 5, sp ? 0.5 : 0.3);
+      this.igniteArea(x, z, sp ? sp * (color === 0xff8040 ? 0.95 : 0.55) : 5, sp ? (color === 0xff8040 ? 0.95 : 0.5) : 0.3);
       if (sp >= 22) this.crater(x, z, sp * 0.5, Math.min(3, sp * 0.06));
     }
     if (sp > 0) {
@@ -1128,7 +1159,8 @@ export class Game {
       }
       return;
     }
-    if (u.civ) { if (u.civ.owner === u) u.civ.owner = null; if (this.occ.get(u.cz * m.n + u.cx) === u) this.occ.delete(u.cz * m.n + u.cx); }
+    if (d.span) { if (this.occ.get(u.cx) === u) this.occ.delete(u.cx); }
+    else if (u.civ) { if (u.civ.owner === u) u.civ.owner = null; if (this.occ.get(u.cz * m.n + u.cx) === u) this.occ.delete(u.cz * m.n + u.cx); }
     else if (d.cls === 'building') {
       for (let j = 0; j < d.fh; j++) for (let i = 0; i < d.fw; i++) m.block[(u.cz + j) * m.n + u.cx + i]--;
       if (this.occ.get(u.cz * m.n + u.cx) === u) this.occ.delete(u.cz * m.n + u.cx);
@@ -1140,7 +1172,7 @@ export class Game {
     if (u.built) {
       if (!d.kami) { u.team.stats.lost++; if (by && by !== u.team) by.stats.kills++; }
       if (d.inf) this.addBody(u.x, u.z, u.team.fac);
-      else if (d.cls !== 'air' && !d.reuse && !u.team.dead) this.wrecks.push({ id: this.nextId++, x: u.x, y: m.groundY(u.x, u.z), z: u.z, r: Math.min(d.r, 9), metal: d.m * 0.5, max: d.m * 0.5, dead: false, rot: this.rng() * 6.28, born: this.tick });
+      else if (d.cls !== 'air' && !d.reuse && !d.span && !u.team.dead) this.wrecks.push({ id: this.nextId++, x: u.x, y: m.groundY(u.x, u.z), z: u.z, r: Math.min(d.r, 9), metal: d.m * 0.5, max: d.m * 0.5, dead: false, rot: this.rng() * 6.28, born: this.tick });
       if (d.cls !== 'air' && !d.inf && !d.reuse) this.igniteArea(u.x, u.z, d.r * 0.8, 0.6);
       if (d.blast) this.crater(u.x, u.z, d.blast.r * 0.3, 4); else if (d.r >= 5 && d.cls !== 'air' && !d.reuse) this.crater(u.x, u.z, d.r * 0.9, 1.1);
       if (d.blast) this.blasts.push({ x: u.x, z: u.z, r: d.blast.r, d: d.blast.d });

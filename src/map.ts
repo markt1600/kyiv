@@ -24,7 +24,7 @@ export interface Civ {
 }
 /** kinds: 0 house, 1 slab apartment block, 2 tower block, 3 industrial shed, 4 church, 5 St Sophia, 6 Motherland Monument, 7 Independence column, 8 TV tower, 9 Antonov hangar */
 export const CIV_NAMES = ['House', 'Apartment block', 'Tower block', 'Warehouse', 'Church', 'St Sophia Cathedral', 'Motherland Monument', 'Independence Monument', 'Kyiv TV Tower', 'Antonov Hangar'];
-export interface Bridge { x: number; z: number; ang: number; len: number; name: string; dead: boolean; t: number[] }
+export interface Bridge { x: number; z: number; ang: number; len: number; name: string; dead: boolean; t: number[]; pontoon?: boolean; save?: { i0: number; i1: number; j0: number; j1: number; h: Float32Array } }
 
 const AMP = 64;
 type Pt = [number, number];
@@ -382,20 +382,38 @@ export class GameMap {
     if (cx < 0 || cz < 0 || cx >= this.n || cz >= this.n) return false;
     const i = cz * this.n + cx; return (nav === 2 ? this.passF[i] : nav ? this.passW[i] : this.pass[i]) === 1 && this.block[i] === 0;
   }
-  /** bring a bridge down: the crossing becomes open water */
-  dropBridge(b: Bridge) {
-    if (b.dead) return; b.dead = true;
-    const { n, hn } = this, H = this.heights, t = b.t, R = b.len / 2 + 30;
-    const i0 = Math.max(1, Math.floor((b.x - R) / VS)), i1 = Math.min(hn - 2, Math.ceil((b.x + R) / VS)), j0 = Math.max(1, Math.floor((b.z - R) / VS)), j1 = Math.min(hn - 2, Math.ceil((b.z + R) / VS));
-    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      const dx = i * VS - b.x, dz = j * VS - b.z, al = Math.abs(dx * t[0] + dz * t[1]), ac = Math.abs(dx * -t[1] + dz * t[0]);
-      if (al < 26 && ac < b.len / 2 - 6) H[j * hn + i] = lerp(H[j * hn + i], this.waterY - 6, 1 - smooth(b.len / 2 - 20, b.len / 2 - 6, ac));
-    }
+  private repass(i0: number, i1: number, j0: number, j1: number) {
+    const { n, hn } = this, H = this.heights;
     for (let cz = Math.max(1, j0 >> 1); cz <= Math.min(n - 2, j1 >> 1); cz++) for (let cx = Math.max(1, i0 >> 1); cx <= Math.min(n - 2, i1 >> 1); cx++) {
       let lo = 1e9, hi = -1e9;
       for (let j = 0; j <= 2; j++) for (let i = 0; i <= 2; i++) { const h = H[(cz * 2 + j) * hn + cx * 2 + i]; if (h < lo) lo = h; if (h > hi) hi = h; }
-      const k = cz * n + cx; this.pass[k] = hi - lo < 5.2 && lo > this.waterY + 0.6 ? 1 : 0; this.passF[k] = this.pass[k] || H[(cz * 2 + 1) * hn + cx * 2 + 1] < this.waterY + 2.4 ? 1 : 0; this.road[k] = this.pass[k] ? this.road[k] : 0;
+      const k = cz * n + cx; this.pass[k] = hi - lo < 5.2 && lo > this.waterY + 0.6 ? 1 : 0; this.passF[k] = this.pass[k] || H[(cz * 2 + 1) * hn + cx * 2 + 1] < this.waterY + 2.4 ? 1 : 0; if (!this.pass[k]) this.road[k] = 0;
     }
+  }
+  /** bring a bridge down: the crossing becomes open water */
+  dropBridge(b: Bridge) {
+    if (b.dead) return; b.dead = true;
+    const hn = this.hn, H = this.heights, t = b.t, R = b.len / 2 + 30;
+    const i0 = Math.max(1, Math.floor((b.x - R) / VS)), i1 = Math.min(hn - 2, Math.ceil((b.x + R) / VS)), j0 = Math.max(1, Math.floor((b.z - R) / VS)), j1 = Math.min(hn - 2, Math.ceil((b.z + R) / VS));
+    const w = i1 - i0 + 1, save = new Float32Array(w * (j1 - j0 + 1));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      save[(j - j0) * w + i - i0] = H[j * hn + i];
+      const dx = i * VS - b.x, dz = j * VS - b.z, al = Math.abs(dx * t[0] + dz * t[1]), ac = Math.abs(dx * -t[1] + dz * t[0]);
+      if (al < 26 && ac < b.len / 2 - 6) H[j * hn + i] = lerp(H[j * hn + i], this.waterY - 6, 1 - smooth(b.len / 2 - 20, b.len / 2 - 6, ac));
+    }
+    b.save = { i0, i1, j0, j1, h: save };
+    this.repass(i0, i1, j0, j1);
+  }
+  /** a pontoon bridge reopens a destroyed crossing */
+  raiseBridge(b: Bridge) {
+    if (!b.dead || !b.save) return;
+    const hn = this.hn, H = this.heights, { i0, i1, j0, j1, h } = b.save, w = i1 - i0 + 1;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const dx = i * VS - b.x, dz = j * VS - b.z, al = Math.abs(dx * b.t[0] + dz * b.t[1]);
+      if (al < 26) H[j * hn + i] = h[(j - j0) * w + i - i0]; // craters dug elsewhere since stay as they are
+    }
+    b.dead = false; b.pontoon = true; b.save = undefined;
+    this.repass(i0, i1, j0, j1);
   }
   passAt(x: number, z: number, nav: boolean | number = false) { return this.cellPass(Math.floor(x / CELL), Math.floor(z / CELL), nav); }
   cellOf(x: number, z: number) {
