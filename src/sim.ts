@@ -957,7 +957,7 @@ export class Game {
 
   private fire(u: Unit, w: WeaponDef, t: Unit) {
     const d = u.def;
-    const mx = u.x + Math.sin(u.turret) * d.r * 0.7, mz = u.z + Math.cos(u.turret) * d.r * 0.7, my = u.y + d.h * (d.cls === 'air' ? 0 : 0.75);
+    const mr = d.inf ? d.r * 1.5 : d.r * 0.7, mx = u.x + Math.sin(u.turret) * mr, mz = u.z + Math.cos(u.turret) * mr, my = u.y + d.h * (d.cls === 'air' ? 0 : d.inf ? 0.62 : 0.75);
     const ty = t.y + (t.def.cls === 'air' ? 0 : t.def.h * 0.5);
     const dist = Math.hypot(t.x - u.x, t.z - u.z);
     const mk = (k: number): Proj => ({ k, x: mx, y: my, z: mz, px: mx, py: my, pz: mz, vx: 0, vy: 0, vz: 0, sx: mx, sy: my, sz: mz, tx: t.x, ty, tz: t.z, t: 0, T: 1, arc: 0, target: null, w, team: u.team, dead: false });

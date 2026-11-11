@@ -14,10 +14,10 @@ export interface WeaponDef {
   spawn?: string; // launch: unit id to spawn
   bld?: boolean;  // only engages structures that have been spotted (strategic weapons)
 }
-/** s: 0 box [w,h,l] | 1 cylinder [rTop,rBot,h] | 2 sphere [r] | 3 cone [r,h] */
+/** s: 0 box [w,h,l] | 1 cylinder [rTop,rBot,h] | 2 sphere [r] | 3 cone [r,h] | 4 capsule [r,len] | 5 rounded box [w,h,l] | 6 dome [r] */
 export interface Part { s: number; d: number[]; p: number[]; r?: number[]; c: string; g?: string }
-/** part groups: b body, t turret, s spinner, p / q left / right leg (swing about the hip), h head (turns on the neck, carried by the turret group) */
-export interface Model { parts: Part[]; tp?: number[]; sp?: number[]; sa?: 'y' | 'z'; ss?: number; hip?: number; neck?: number }
+/** part groups: b body, t turret, s spinner, p / q left / right thigh (swing about the hip), k / l left / right shin (bend at the knee, carried by the thigh), h head (turns on the neck, carried by the turret group) */
+export interface Model { parts: Part[]; tp?: number[]; sp?: number[]; sa?: 'y' | 'z'; ss?: number; hip?: number; knee?: number; neck?: number }
 
 export interface UnitDef {
   id: string; name: string; names?: [string, string]; desc: string; tier: number;
@@ -84,20 +84,49 @@ const pad = (w: number, l: number, hh = 0.6): Part[] => [B(w, hh, l, 0, hh / 2, 
 const bags = (w: number, l: number, h = 1.6, y = 0): Part[] => [
   B(w, h, 1.2, 0, y + h / 2, -l / 2, 'O'), B(w, h, 1.2, 0, y + h / 2, l / 2, 'O'), B(1.2, h, l, -w / 2, y + h / 2, 0, 'O'), B(1.2, h, l, w / 2, y + h / 2, 0, 'O'),
 ];
-/** a soldier: each leg swings from the hip (groups p / q), everything above the belt aims with the weapon */
-const leg = (sx: number, g: string): Part[] => [
-  B(0.5, 1.0, 0.58, sx, 1.5, 0, 'U', g), B(0.44, 0.95, 0.5, sx, 0.72, -0.02, 'U', g), B(0.5, 0.3, 0.2, sx, 1.02, 0.3, 'D', g), B(0.5, 0.42, 0.98, sx, 0.21, 0.16, 'K', g),
+// ── the infantryman ──
+// Built to human proportions (about 4.6 units tall): rounded limbs jointed at hip, knee and neck, a face under the helmet rim,
+// plate carrier with magazine pouches and radio, assault pack, knee pads, gloves, and a rifle held at the low ready.
+const CP = (r: number, len: number, x: number, y: number, z: number, c: string, g?: string, rot?: number[]): Part => ({ s: 4, d: [r, len], p: [x, y, z], c, g, r: rot });
+const RB = (w: number, h: number, l: number, x: number, y: number, z: number, c: string, g?: string, rot?: number[]): Part => ({ s: 5, d: [w, h, l], p: [x, y, z], c, g, r: rot });
+const DM = (r: number, x: number, y: number, z: number, c: string, g?: string): Part => ({ s: 6, d: [r], p: [x, y, z], c, g });
+const HIP = 2.15, KNEE = 1.15, NECK = 3.7;
+const leg = (sx: number, thigh: string, shin: string): Part[] => [
+  CP(0.27, 0.62, sx, 1.66, 0, 'U', thigh), RB(0.2, 0.42, 0.34, sx + Math.sign(sx) * 0.27, 1.62, 0.02, 'U', thigh), // thigh and cargo pocket
+  CP(0.21, 0.56, sx, 0.74, -0.02, 'U', shin), RB(0.44, 0.36, 0.2, sx, 1.14, 0.22, 'D', shin),                      // shin and knee pad
+  RB(0.44, 0.5, 0.52, sx, 0.27, 0, 'K', shin), RB(0.42, 0.28, 0.5, sx, 0.15, 0.36, 'K', shin), B(0.46, 0.08, 0.92, sx, 0.04, 0.16, 'K', shin), // boot, toe cap, sole
 ];
-const RIFLE: Part[] = [B(0.14, 0.3, 1.5, 0.42, 3.22, 0.8, 'K', 't'), BR(0.055, 1.0, 0.42, 3.27, 1.5), B(0.12, 0.5, 0.22, 0.42, 2.95, 0.9, 'K', 't', [0.25, 0, 0]),
-  B(0.12, 0.34, 0.6, 0.42, 3.16, -0.2, 'K', 't'), B(0.1, 0.14, 0.4, 0.42, 3.45, 0.7, 'D', 't')];
+const RIFLE: Part[] = [
+  B(0.12, 0.2, 0.86, 0.3, 3.0, 0.82, 'K', 't'), B(0.13, 0.17, 0.52, 0.3, 3.0, 1.5, 'O', 't'), BR(0.045, 0.62, 0.3, 3.03, 1.74), TZ(0.035, 0.5, 0.3, 3.1, 1.56, 'K', 't'),
+  TZ(0.065, 0.16, 0.3, 3.03, 2.42, 'K', 't'), B(0.03, 0.12, 0.03, 0.3, 3.13, 2.26, 'K', 't'),
+  B(0.1, 0.5, 0.2, 0.3, 2.7, 1.02, 'O', 't', [0.38, 0, 0]), B(0.1, 0.3, 0.14, 0.3, 2.8, 0.56, 'K', 't', [-0.25, 0, 0]),
+  B(0.1, 0.2, 0.62, 0.3, 3.02, 0.1, 'K', 't'), B(0.11, 0.28, 0.12, 0.3, 2.98, -0.2, 'K', 't'), B(0.1, 0.13, 0.32, 0.3, 3.18, 0.82, 'K', 't'), B(0.06, 0.06, 0.2, 0.3, 3.15, 0.5, 'K', 't'),
+];
 const trooper = (extra: Part[] = [], helmet = 'H', rifle = true): Part[] => [
-  ...leg(-0.36, 'p'), ...leg(0.36, 'q'),
-  B(1.16, 0.4, 0.72, 0, 2.12, 0, 'D', 't'), B(1.2, 1.3, 0.7, 0, 2.92, 0, 'U', 't'), B(1.32, 1.0, 0.88, 0, 3.0, 0.02, 'V', 't'),
-  B(0.3, 0.42, 0.2, -0.4, 2.62, 0.5, 'V', 't'), B(0.3, 0.42, 0.2, 0, 2.62, 0.5, 'V', 't'), B(0.3, 0.42, 0.2, 0.4, 2.62, 0.5, 'V', 't'),
-  B(0.9, 1.0, 0.5, 0, 3.0, -0.64, 'V', 't'), B(0.8, 0.3, 0.44, 0, 3.6, -0.6, 'U', 't'),
-  B(0.36, 1.15, 0.4, -0.72, 3.0, 0.42, 'U', 't', [-1.05, 0, 0.25]), B(0.36, 1.05, 0.4, 0.8, 2.92, 0.22, 'U', 't', [-0.6, 0, 0]), B(0.4, 0.26, 0.44, -0.78, 3.42, 0.08, 'G', 't'),
-  B(0.2, 0.2, 0.24, -0.5, 3.24, 0.98, 'S', 't'), C(0.16, 0.18, 0.3, 0, 3.66, 0, 'S', 'h'), S(0.36, 0, 3.98, 0.02, 'S', 'h'),
-  S(0.47, 0, 4.1, -0.02, helmet, 'h'), B(0.86, 0.12, 0.9, 0, 4.0, 0, helmet, 'h'), B(0.5, 0.16, 0.12, 0, 3.98, 0.36, 'K', 'h'),
+  ...leg(-0.3, 'p', 'k'), ...leg(0.3, 'q', 'l'),
+  // pelvis, belt kit
+  RB(1.04, 0.52, 0.62, 0, 2.22, 0, 'U', 't'), B(1.1, 0.16, 0.68, 0, 2.44, 0, 'V', 't'), RB(0.26, 0.4, 0.3, -0.62, 2.3, -0.1, 'V', 't'), RB(0.22, 0.44, 0.26, 0.63, 2.24, 0.06, 'K', 't'), RB(0.5, 0.36, 0.26, 0, 2.3, -0.42, 'V', 't'),
+  // torso
+  RB(0.98, 0.66, 0.56, 0, 2.76, 0, 'U', 't'), RB(1.2, 0.84, 0.66, 0, 3.26, 0, 'U', 't'), S(0.28, -0.66, 3.5, 0, 'U', 't'), S(0.28, 0.66, 3.5, 0, 'U', 't'),
+  // plate carrier: front and back plates, cummerbund, shoulder straps
+  RB(0.94, 0.98, 0.22, 0, 3.12, 0.36, 'V', 't'), RB(0.94, 1.0, 0.2, 0, 3.14, -0.36, 'V', 't'), B(0.16, 0.5, 0.64, -0.58, 2.9, 0, 'V', 't'), B(0.16, 0.5, 0.64, 0.58, 2.9, 0, 'V', 't'),
+  B(0.22, 0.1, 0.74, -0.36, 3.66, 0, 'V', 't'), B(0.22, 0.1, 0.74, 0.36, 3.66, 0, 'V', 't'),
+  // three rifle magazines, a radio, a tourniquet, a grenade
+  RB(0.26, 0.42, 0.18, -0.3, 2.9, 0.54, 'V', 't'), RB(0.26, 0.42, 0.18, 0, 2.9, 0.54, 'V', 't'), RB(0.26, 0.42, 0.18, 0.3, 2.9, 0.54, 'V', 't'),
+  B(0.18, 0.1, 0.1, -0.3, 3.14, 0.54, 'K', 't'), B(0.18, 0.1, 0.1, 0, 3.14, 0.54, 'K', 't'), B(0.18, 0.1, 0.1, 0.3, 3.14, 0.54, 'K', 't'),
+  RB(0.26, 0.4, 0.16, -0.3, 3.4, 0.5, 'D', 't'), C(0.02, 0.025, 1.0, -0.4, 4.08, -0.3, 'K', 't'), B(0.3, 0.1, 0.08, 0.26, 3.46, 0.5, 'R', 't'), S(0.11, 0.5, 2.62, 0.4, 'D', 't'),
+  // assault pack with a bedroll
+  RB(0.82, 0.92, 0.42, 0, 3.08, -0.68, 'V', 't'), RB(0.5, 0.4, 0.2, 0, 2.94, -0.94, 'V', 't'), C(0.17, 0.17, 0.86, 0, 3.66, -0.66, 'D', 't', [0, 0, H]),
+  // arms: support hand forward on the handguard, firing hand at the grip
+  CP(0.2, 0.44, -0.72, 3.2, 0.28, 'U', 't', [-0.95, 0, -0.1]), CP(0.17, 0.46, -0.5, 3.02, 0.94, 'U', 't', [-1.5, 0.75, 0]), S(0.17, -0.2, 3.0, 1.34, 'K', 't'),
+  CP(0.2, 0.44, 0.74, 3.16, 0.12, 'U', 't', [-0.45, 0, 0.1]), CP(0.17, 0.42, 0.6, 2.9, 0.44, 'U', 't', [-1.25, -0.5, 0]), S(0.17, 0.34, 2.86, 0.62, 'K', 't'),
+  RB(0.46, 0.2, 0.46, -0.72, 3.3, 0.22, 'G', 't', [-0.95, 0, -0.1]), RB(0.3, 0.24, 0.04, 0.66, 3.4, 0.24, 'G', 't'),
+  // head: neck, skull, jaw, nose, eyes, ears, then the helmet with cover, rim, goggles, NVG mount and chin strap
+  C(0.16, 0.18, 0.3, 0, 3.76, 0, 'S', 'h'), S(0.33, 0, 4.1, 0, 'S', 'h'), RB(0.46, 0.34, 0.5, 0, 3.94, 0.04, 'S', 'h'), B(0.1, 0.16, 0.12, 0, 4.02, 0.33, 'S', 'h'),
+  B(0.09, 0.045, 0.04, -0.12, 4.1, 0.3, 'K', 'h'), B(0.09, 0.045, 0.04, 0.12, 4.1, 0.3, 'K', 'h'), B(0.2, 0.03, 0.04, 0, 3.9, 0.3, 'R', 'h'), B(0.06, 0.14, 0.1, -0.34, 4.04, 0, 'S', 'h'), B(0.06, 0.14, 0.1, 0.34, 4.04, 0, 'S', 'h'),
+  DM(0.45, 0, 4.16, -0.02, helmet, 'h'), C(0.46, 0.46, 0.08, 0, 4.18, -0.02, helmet, 'h'), RB(0.84, 0.26, 0.4, 0, 4.06, -0.26, helmet, 'h'), B(0.5, 0.05, 0.14, 0, 4.2, 0.44, helmet, 'h'),
+  RB(0.5, 0.15, 0.1, 0, 4.4, 0.36, 'K', 'h'), B(0.92, 0.05, 0.9, 0, 4.34, -0.02, 'V', 'h', [0, 0.785, 0]), B(0.14, 0.12, 0.12, 0, 4.3, 0.44, 'K', 'h'),
+  B(0.04, 0.34, 0.06, -0.32, 3.98, 0.12, 'K', 'h'), B(0.04, 0.34, 0.06, 0.32, 3.98, 0.12, 'K', 'h'), B(0.5, 0.05, 0.08, 0, 3.8, 0.2, 'K', 'h'),
   ...(rifle ? RIFLE : []), ...extra,
 ];
 
@@ -393,32 +422,32 @@ U({
 U({
   id: 'engineer', name: 'Engineer', names: ['Sapper', 'Combat Engineer'], desc: 'Builds and repairs every structure, salvages wrecks.', cls: 'ground', inf: true,
   hp: 240, m: 95, e: 1200, work: 560, speed: 14, turn: 5, r: 1.7, h: 4.6, bp: 9, builds: ENG_BUILD, bot: true, sight: 160,
-  model: { tp: [0, 2, 0], hip: 2, neck: 3.6, parts: trooper([C(0.07, 0.07, 2.6, 0.5, 3.5, -0.95, 'O', 't'), B(0.5, 0.6, 0.1, 0.5, 4.9, -0.95, 'M', 't'), B(0.5, 0.5, 0.9, 0.5, 2.5, 0.8, 'Y', 't')], 'H', false) },
+  model: { tp: [0, HIP, 0], hip: HIP, knee: KNEE, neck: NECK, parts: trooper([C(0.07, 0.07, 2.6, 0.5, 3.5, -0.95, 'O', 't'), B(0.5, 0.6, 0.1, 0.5, 4.9, -0.95, 'M', 't'), B(0.5, 0.5, 0.9, 0.5, 2.5, 0.8, 'Y', 't')], 'H', false) },
 });
 U({
   id: 'rifle', name: 'Rifleman', names: ['Territorial Defence', 'Motor Rifleman'], desc: 'Basic infantry. Cheap, numerous, effective against other infantry.', cls: 'ground', inf: true,
   hp: 210, m: 34, e: 380, work: 170, speed: 16, turn: 5.5, r: 1.6, h: 4.6, bot: true, sight: 185,
   weapons: [{ k: 'gun', range: 118, reload: 0.5, dmg: 9, tg: 1, color: TR },
     { k: 'cannon', range: 62, min: 14, reload: 8, dmg: 70, splash: 14, speed: 62, arc: 0.5, spread: 0.07, tg: 1, color: 0x50543c, free: true }],
-  model: { tp: [0, 2, 0], hip: 2, neck: 3.6, parts: trooper() },
+  model: { tp: [0, HIP, 0], hip: HIP, knee: KNEE, neck: NECK, parts: trooper() },
 });
 U({
   id: 'atgm', name: 'Javelin Team', names: ['Javelin Team', 'Kornet Team'], desc: 'Anti-tank guided missile. Devastating against armour, slow to reload.', cls: 'ground', inf: true,
   hp: 200, m: 85, e: 950, work: 400, speed: 13.5, turn: 4.5, r: 1.6, h: 4.6, bot: true, sight: 200,
   weapons: [{ k: 'missile', range: 215, min: 20, reload: 4.2, dmg: 190, splash: 7, speed: 170, tg: 1, color: 0xffa060, free: true }],
-  model: { tp: [0, 2, 0], hip: 2, neck: 3.6, parts: trooper([TZ(0.3, 2.8, 0.75, 3.55, 0.2, 'T', 't'), TZ(0.42, 0.5, 0.75, 3.55, 1.5, 'K', 't'), TZ(0.42, 0.5, 0.75, 3.55, -1.1, 'K', 't'), B(0.4, 0.5, 0.5, 0.75, 3.1, 0.6, 'D', 't')], 'H', false) },
+  model: { tp: [0, HIP, 0], hip: HIP, knee: KNEE, neck: NECK, parts: trooper([TZ(0.3, 2.8, 0.75, 3.55, 0.2, 'T', 't'), TZ(0.42, 0.5, 0.75, 3.55, 1.5, 'K', 't'), TZ(0.42, 0.5, 0.75, 3.55, -1.1, 'K', 't'), B(0.4, 0.5, 0.5, 0.75, 3.1, 0.6, 'D', 't')], 'H', false) },
 });
 U({
   id: 'manpad', name: 'Stinger Team', names: ['Stinger Team', 'Igla Team'], desc: 'Shoulder-fired anti-aircraft missile.', cls: 'ground', inf: true,
   hp: 200, m: 80, e: 1000, work: 400, speed: 15, turn: 4.5, r: 1.6, h: 4.6, bot: true, sight: 250,
   weapons: [{ k: 'missile', range: 250, reload: 1.9, dmg: 95, speed: 300, tg: 2, color: SAMC, free: true }],
-  model: { tp: [0, 2, 0], hip: 2, neck: 3.6, parts: trooper([C(0.22, 0.22, 3.2, 0.75, 3.9, 0.3, 'C', 't', [1.1, 0, 0]), C(0.34, 0.34, 0.4, 0.75, 4.55, 1.55, 'K', 't', [1.1, 0, 0]), B(0.4, 0.6, 0.5, 0.75, 3.3, 0.7, 'D', 't')], 'H', false) },
+  model: { tp: [0, HIP, 0], hip: HIP, knee: KNEE, neck: NECK, parts: trooper([C(0.22, 0.22, 3.2, 0.75, 3.9, 0.3, 'C', 't', [1.1, 0, 0]), C(0.34, 0.34, 0.4, 0.75, 4.55, 1.55, 'K', 't', [1.1, 0, 0]), B(0.4, 0.6, 0.5, 0.75, 3.3, 0.7, 'D', 't')], 'H', false) },
 });
 U({
   id: 'mortar', name: 'Mortar Team', desc: 'Lobs 82 mm bombs over cover. Good against infantry and bunkers.', cls: 'ground', inf: true,
   hp: 200, m: 75, e: 800, work: 360, speed: 13, turn: 4.5, r: 1.7, h: 4.6, bot: true, sight: 190,
   weapons: [{ k: 'cannon', range: 240, min: 45, reload: 2.8, dmg: 78, splash: 17, speed: 120, arc: 0.45, spread: 0.05, tg: 1, color: SHELL, free: true }],
-  model: { tp: [0, 2, 0], hip: 2, neck: 3.6, parts: trooper([C(0.2, 0.24, 2.6, 0, 1.3, 1.5, 'D', 't', [0.6, 0, 0]), C(0.7, 0.7, 0.15, 0, 0.1, 0.8, 'K', 't'), B(0.08, 1.6, 0.08, -0.4, 0.8, 2, 'K', 't', [0, 0, 0.3]), B(0.08, 1.6, 0.08, 0.4, 0.8, 2, 'K', 't', [0, 0, -0.3])]) },
+  model: { tp: [0, HIP, 0], hip: HIP, knee: KNEE, neck: NECK, parts: trooper([C(0.2, 0.24, 2.6, 0, 1.3, 1.5, 'D', 't', [0.6, 0, 0]), C(0.7, 0.7, 0.15, 0, 0.1, 0.8, 'K', 't'), B(0.08, 1.6, 0.08, -0.4, 0.8, 2, 'K', 't', [0, 0, 0.3]), B(0.08, 1.6, 0.08, 0.4, 0.8, 2, 'K', 't', [0, 0, -0.3])]) },
 });
 
 // ───────────────────────── Vehicles ─────────────────────────

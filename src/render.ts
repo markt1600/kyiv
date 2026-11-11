@@ -26,12 +26,14 @@ const FACPAL: Record<string, number>[] = [
 ];
 const PLAIN = 'TCDML';
 
-type Geos = { b: THREE.BufferGeometry | null; t: THREE.BufferGeometry | null; s: THREE.BufferGeometry | null; p: THREE.BufferGeometry | null; q: THREE.BufferGeometry | null; h: THREE.BufferGeometry | null };
+type GK = 'b' | 't' | 's' | 'p' | 'q' | 'k' | 'l' | 'h';
+type Geos = Record<GK, THREE.BufferGeometry | null>;
 /** every part group of a model with its pivot */
 function partList(def: UnitDef, g: Geos): [THREE.BufferGeometry, number[] | undefined][] {
   const o: [THREE.BufferGeometry, number[] | undefined][] = [], hip = [0, def.model.hip || 0, 0];
   if (g.b) o.push([g.b, undefined]); if (g.t) o.push([g.t, def.model.tp]); if (g.s) o.push([g.s, def.model.sp]);
-  if (g.p) o.push([g.p, hip]); if (g.q) o.push([g.q, hip]); if (g.h) o.push([g.h, [0, def.model.neck || 0, 0]]);
+  const knee = [0, def.model.knee || 0, 0];
+  if (g.p) o.push([g.p, hip]); if (g.q) o.push([g.q, hip]); if (g.k) o.push([g.k, knee]); if (g.l) o.push([g.l, knee]); if (g.h) o.push([g.h, [0, def.model.neck || 0, 0]]);
   return o;
 }
 const geoCache = new Map<string, Geos>();
@@ -48,7 +50,7 @@ function boxUV(g: THREE.BufferGeometry, off: number) {
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
 }
 function buildGeos(model: Model, fac: number): Geos {
-  const groups: Record<string, THREE.BufferGeometry[]> = { b: [], t: [], s: [], p: [], q: [], h: [] };
+  const groups: Record<string, THREE.BufferGeometry[]> = { b: [], t: [], s: [], p: [], q: [], k: [], l: [], h: [] };
   const col = new THREE.Color(), e = new THREE.Euler(), m = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), pos = new THREE.Vector3();
   const paint = (g: THREE.BufferGeometry, code: string, pi: number, shade = 1) => {
     let k = 1;
@@ -62,7 +64,7 @@ function buildGeos(model: Model, fac: number): Geos {
       else if (k === 1) {
         // per-face plate tint, sky-facing surfaces catch more light, and a grounded contact shadow
         f *= 0.93 + 0.14 * hash2(pi, n, 17) + nrm.getY(i) * 0.08;
-        f *= 0.62 + 0.38 * clamp((ps.getY(i) + 0.5) / 3.5, 0, 1);
+        if (!model.hip) f *= 0.62 + 0.38 * clamp((ps.getY(i) + 0.5) / 3.5, 0, 1);
       }
       ca[i * 3] = col.r * k * f; ca[i * 3 + 1] = col.g * k * f; ca[i * 3 + 2] = col.b * k * f;
     }
@@ -94,10 +96,13 @@ function buildGeos(model: Model, fac: number): Geos {
         for (const fy of [-0.3, 0.3]) { const bd = new THREE.CylinderGeometry(rr, rr, Math.min(0.5, p.d[2] * 0.07), 12); bd.translate(0, fy * p.d[2], 0); list.push([bd, p.c === 'D' ? 'M' : 'D', 1]); }
       }
     } else if (p.s === 2) list.push([new THREE.SphereGeometry(p.d[0], 12, 8), p.c, 1]);
+    else if (p.s === 4) list.push([new THREE.CapsuleGeometry(p.d[0], p.d[1], 3, 10), p.c, 1]);
+    else if (p.s === 5) list.push([new RoundedBoxGeometry(p.d[0], p.d[1], p.d[2], 2, Math.min(p.d[0], p.d[1], p.d[2]) * 0.3), p.c, 1]);
+    else if (p.s === 6) list.push([new THREE.SphereGeometry(p.d[0], 14, 7, 0, Math.PI * 2, 0, Math.PI / 2), p.c, 1]);
     else list.push([new THREE.ConeGeometry(p.d[0], p.d[1], 10), p.c, 1]);
     const grp = p.g || 'b';
-    const piv = grp === 't' ? model.tp! : grp === 'p' || grp === 'q' ? [0, model.hip!, 0] : grp === 'h' ? [0, model.neck!, 0] : [0, 0, 0];
-    const pivY = grp === 't' ? model.tp![1] : grp === 's' ? model.sp![1] : grp === 'b' ? 0 : grp === 'h' ? model.neck! : model.hip!;
+    const pivY = grp === 't' ? model.tp![1] : grp === 's' ? model.sp![1] : grp === 'b' ? 0 : grp === 'h' ? model.neck! : grp === 'k' || grp === 'l' ? model.knee! : model.hip!;
+    const piv = grp === 't' ? model.tp! : grp === 'b' || grp === 's' ? [0, 0, 0] : [0, pivY, 0];
     e.set(p.r ? p.r[0] : 0, p.r ? p.r[1] : 0, p.r ? p.r[2] : 0);
     q.setFromEuler(e); pos.set(p.p[0] - piv[0], p.p[1] - piv[1], p.p[2] - piv[2]);
     m.compose(pos, q, one);
@@ -112,7 +117,7 @@ function buildGeos(model: Model, fac: number): Geos {
     }
   }
   const mk = (a: THREE.BufferGeometry[]) => (a.length ? mergeGeometries(a) : null);
-  return { b: mk(groups.b), t: mk(groups.t), s: mk(groups.s), p: mk(groups.p), q: mk(groups.q), h: mk(groups.h) };
+  return { b: mk(groups.b), t: mk(groups.t), s: mk(groups.s), p: mk(groups.p), q: mk(groups.q), k: mk(groups.k), l: mk(groups.l), h: mk(groups.h) };
 }
 function geosFor(def: UnitDef, team: number): Geos {
   const key = def.id + '|' + team;
@@ -258,6 +263,8 @@ export class Renderer {
   private debris!: THREE.InstancedMesh; private dPos = new Float32Array(360 * 3); private dVel = new Float32Array(360 * 3); private dRot = new Float32Array(360 * 4); private dLife = new Float32Array(360); private dSize = new Float32Array(360); private dHead = 0;
   private later: { t: number; fn: () => void }[] = []; shake = 0; private sunDir = new THREE.Vector3(0.55, 0.75, 0.35).normalize();
   private grade: ShaderPass | null = null;
+  /** thermal drone-feed view */
+  flir = false; private waterDepth: { depth: Uint8Array; dTex: THREE.DataTexture } | null = null; private terrainMatAttr!: THREE.BufferAttribute; private trackDirty = false; private trackT = 0; private pose = new WeakMap<Unit, number>();
   world!: World; private hemi!: THREE.HemisphereLight; night = 0; private rockets: { m: THREE.Mesh; vy: number; t: number; y0: number }[] = [];
   private uSeason = { snow: { value: 0 }, mud: { value: 0 }, dry: { value: 0 } }; private skyDay = new THREE.Color(); private bloomPass: UnrealBloomPass | null = null;
   private plans = new Map<string, THREE.Group>(); private planMat = new THREE.MeshBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.3, depthWrite: false, fog: false });
@@ -292,7 +299,7 @@ export class Renderer {
     this.scene.add(sun, sun.target);
 
     const plate = platingTextures();
-    this.unitMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.86, metalness: 0.14, map: plate.map, normalMap: plate.normal, normalScale: new THREE.Vector2(0.9, 0.9), envMapIntensity: 0.5 });
+    this.unitMat = new THREE.MeshStandardMaterial({ vertexColors: true, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.86, metalness: 0.14, map: plate.map, normalMap: plate.normal, normalScale: new THREE.Vector2(0.9, 0.9), envMapIntensity: 0.5 });
     // matte camouflage and weathering: two scales of object-space noise break every surface into blotches, dust and grime
     const grime = noiseTexture(128, (x, y) => { const v = 255 * (tile(x, y, 128, 5, 171) * 0.6 + tile(x, y, 128, 13, 173) * 0.4), w = 255 * (tile(x, y, 128, 23, 175) * 0.6 + tile(x, y, 128, 51, 177) * 0.4); return [v, w, 0, 255]; });
     this.unitMat.onBeforeCompile = sh => {
@@ -301,7 +308,8 @@ export class Renderer {
       sh.fragmentShader = 'varying vec3 vOp; uniform sampler2D uGrime;\n' + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
         float cm = texture2D(uGrime, vOp.xz*0.11 + vOp.y*0.07).r*0.5 + texture2D(uGrime, vOp.zy*0.13 + 0.37).r*0.5;
         float gr = texture2D(uGrime, vOp.xy*0.9 + vOp.z*0.61).g;
-        diffuseColor.rgb *= mix(0.72, 1.12, smoothstep(0.44, 0.56, cm)) * (0.82 + 0.36*gr);
+        float px = texture2D(uGrime, floor(vOp.xy*5.0)/41.0 + floor(vOp.z*5.0)/29.0).r;
+        diffuseColor.rgb *= mix(0.72, 1.12, smoothstep(0.44, 0.56, cm)) * (0.82 + 0.36*gr) * mix(0.86, 1.1, step(0.5, px));
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.26, 0.20), (1.0 - smoothstep(0.0, 2.2, vOp.y)) * 0.45 * gr);`);
     };
     this.plate = plate;
@@ -370,6 +378,7 @@ export class Renderer {
     tg.setIndex(new THREE.BufferAttribute(idx, 1)); tg.computeVertexNormals();
     const detail = noiseTexture(512, (x, y) => { const sp = hash2(x, y, 77), v = 105 + 150 * (tile(x, y, 512, 12, 3) * 0.3 + tile(x, y, 512, 48, 5) * 0.3 + tile(x, y, 512, 160, 6) * 0.25 + sp * sp * 0.22) - (sp > 0.985 ? 70 : 0) + (sp < 0.012 ? 60 : 0); return [v, v, v * 0.96, 255]; });
     detail.repeat.set(map.size / 30, map.size / 30); detail.colorSpace = THREE.SRGBColorSpace;
+    this.terrainMatAttr = tg.attributes.aMat as THREE.BufferAttribute;
     this.terrainCol = tg.attributes.color as THREE.BufferAttribute; this.terrainPos = tg.attributes.position as THREE.BufferAttribute; this.terrainNrm = tg.attributes.normal as THREE.BufferAttribute;
     const tnrm = normalTexture(256, (x, y) => tile(x, y, 256, 10, 31) + tile(x, y, 256, 28, 33) * 0.5 + tile(x, y, 256, 70, 35) * 0.25, 5);
     tnrm.repeat.set(map.size / 22, map.size / 22);
@@ -426,7 +435,7 @@ export class Renderer {
         wf.rotation.x = -Math.PI / 2; wf.position.set(map.size / 2, map.waterY + 0.15, map.size / 2); wf.renderOrder = 6; this.scene.add(wf);
       } else {
         const w = makeWater(map, this.fogTex, this.sunDir, bio.sun);
-        this.water = w.mesh; this.waterUni = w.uni; this.scene.add(w.mesh);
+        this.water = w.mesh; this.waterUni = w.uni; this.waterDepth = w; this.scene.add(w.mesh);
       }
     }
 
@@ -502,16 +511,20 @@ export class Renderer {
       this.bloomPass = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.32, 0.5, 0.95); this.composer.addPass(this.bloomPass);
       this.composer.addPass(new OutputPass());
       this.grade = new ShaderPass({
-        uniforms: { tDiffuse: { value: null }, uHeat: { value: 0 }, uT: this.uTime, uCold: this.uSeason.snow },
+        uniforms: { tDiffuse: { value: null }, uHeat: { value: 0 }, uT: this.uTime, uCold: this.uSeason.snow, uFlir: { value: 0 } },
         vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-        fragmentShader: `uniform sampler2D tDiffuse; uniform float uHeat, uT, uCold; varying vec2 vUv;
+        fragmentShader: `uniform sampler2D tDiffuse; uniform float uHeat, uT, uCold, uFlir; varying vec2 vUv;
           void main(){ vec3 c=texture2D(tDiffuse, vUv).rgb; vec2 d=vUv-0.5; float v=smoothstep(0.85, 0.25, length(d*vec2(1.0,0.82)));
             // bleach-bypass war-footage grade: pulled saturation, crushed blacks, a cold cast in winter, film grain
             float l=dot(c, vec3(0.299,0.587,0.114)); c=mix(vec3(l), c, 0.84); c=(c-0.5)*1.12+0.5;
             c*=mix(vec3(1.0), vec3(0.94,0.98,1.05), uCold);
             c*=mix(0.58, 1.0, v); c.r+=uHeat*(1.0-v)*0.12;
             float g=fract(sin(dot(vUv*vec2(1920.0,1080.0)+fract(uT)*71.0, vec2(12.9898,78.233)))*43758.5453);
-            c+=(g-0.5)*0.045; gl_FragColor=vec4(max(c,0.0),1.0); }`,
+            c+=(g-0.5)*0.045;
+            if (uFlir > 0.5) { // white-hot thermal imager: flattened greys, blooming hot spots, scan lines, sensor noise
+              float t=dot(c, vec3(0.3,0.5,0.2)); t=pow(clamp(t*1.15,0.0,1.0), 0.85); t=mix(t*0.55+0.12, 1.0, smoothstep(0.62, 0.95, t));
+              t*=0.93+0.07*sin(vUv.y*900.0); t+=(g-0.5)*0.1; c=vec3(t)*vec3(0.94,1.0,0.96)*mix(0.5,1.0,v); }
+            gl_FragColor=vec4(max(c,0.0),1.0); }`,
       });
       this.composer.addPass(this.grade);
     }
@@ -535,6 +548,8 @@ export class Renderer {
     this.scene.environmentIntensity = lerp(0.35, 0.1, night);
     if (this.bloomPass) this.bloomPass.strength = lerp(0.3, 0.6, night);
     this.uSeason.snow.value = g.snow; this.uSeason.mud.value = g.mud; this.uSeason.dry.value = g.dry;
+    if (this.grade) this.grade.uniforms.uFlir.value = this.flir ? 1 : 0;
+    this.unitMat.emissiveIntensity = this.flir ? 0.75 : 0; // engines and bodies glow in thermal
     void dt; void paused;
   }
 
@@ -751,6 +766,15 @@ export class Renderer {
             break;
           }
           this.boom(e.x, e.y + 2, e.z, sz, 0xffa040, big);
+          if (d.cls === 'ground' && d.weapons[0] && d.weapons[0].k === 'cannon' && d.weapons[0].dmg >= 90 && d.speed) {
+            // ammunition cook-off: the turret is thrown clear and a jet of flame stands out of the hull
+            this.throwDebris(e.x, e.y + d.h, e.z, 1, 4.2, 46);
+            for (let k = 0; k < 16; k++) this.later.push({ t: 0.15 + k * 0.09, fn: () => {
+              for (let i = 0; i < 5; i++) this.fire.spawn(e.x + (Math.random() - 0.5) * 2, e.y + 3, e.z + (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 9, 34 + Math.random() * 30, (Math.random() - 0.5) * 9, 0.45 + Math.random() * 0.3, 4.5, 3.4, 2.2, 0.8, 0.9, 0.6, 0.6, 0, 1);
+              this.fire.spawn(e.x, e.y + 4, e.z, (Math.random() - 0.5) * 40, 20 + Math.random() * 40, (Math.random() - 0.5) * 40, 0.9, 0.8, 3.4, 2.6, 1.2, 1, 0, 0.3, 50, 1);
+              this.flash(e.x, e.y + 8, e.z, 2600, 0.14);
+            } });
+          }
           this.throwDebris(e.x, e.y + d.h * 0.4, e.z, Math.min(26, 3 + d.r * 1.4) * (this.quality >= 1 ? 1 : 0.4), Math.min(3.2, 0.7 + d.r * 0.14), 18 + d.r * 2.2 + (big ? 30 : 0));
           if (d.cls === 'building' || big) {
             const k = big ? 7 : 2 + (d.r > 12 ? 2 : 0);
@@ -769,7 +793,6 @@ export class Renderer {
         }
         case 'collapse': { // a building comes down in a pall of grey dust
           if (e.k === 'bridge') { // spans dropping into the river
-            this.world.dropBridge((e as any).n);
             for (let i = 0; i < 50; i++) { const a = Math.random() * 6.283, r = Math.random() * 50; this.smoke.spawn(e.x + Math.cos(a) * r, map.waterY + 1, e.z + Math.sin(a) * r, Math.cos(a) * 8, 8 + Math.random() * 22, Math.sin(a) * 8, 1.5 + Math.random() * 1.5, 9, 0.88, 0.93, 0.97, 0.7, 1.6, 0.8, 30); }
             this.throwDebris(e.x, e.y + 2, e.z, 24, 2.6, 30); this.shake = Math.min(3, this.shake + 1.5);
             break;
@@ -796,7 +819,7 @@ export class Renderer {
   }
 
   // ───────────── frame ─────────────
-  private im(def: UnitDef, team: number, part: 'b' | 't' | 's' | 'p' | 'q' | 'h', geo: THREE.BufferGeometry): THREE.InstancedMesh {
+  private im(def: UnitDef, team: number, part: GK, geo: THREE.BufferGeometry): THREE.InstancedMesh {
     const key = def.id + '|' + team + '|' + part;
     let im = this.ims.get(key);
     if (!im || im.count >= im.instanceMatrix.count) {
@@ -844,7 +867,7 @@ export class Renderer {
       const d = u.def;
       if (d.cls === 'building' && !this.cleared.has(u)) { this.cleared.add(u); this.scenery.clear(u.cx, u.cz, d.fw, d.fh); }
       const x = lerp(u.px, u.x, alpha), z = lerp(u.pz, u.z, alpha);
-      let y = lerp(u.py, u.y, alpha);
+      let y = lerp(u.py, u.y, alpha), kn = 0;
       const h = u.ph + angDiff(u.ph, u.heading) * alpha;
       if (!u.built) {
         const f = this.frameFor(u); seenFrames.add(u);
@@ -859,7 +882,13 @@ export class Renderer {
           _q.setFromAxisAngle(_yAxis, h); _q2.setFromAxisAngle(_zAxis, Math.sin(T * 1.1 + u.id) * 0.035); _q.multiply(_q2);
           _q2.setFromAxisAngle(_xAxis, Math.sin(T * 0.8 + u.id * 2) * 0.025); _q.multiply(_q2); y += Math.sin(T * 1.3 + u.id) * 0.3;
         } else if (d.cls === 'ground') {
-          if (d.bot) { if (u.speed > 1) y += Math.abs(Math.sin(T * 11 + u.id * 1.7)) * 0.14; _q.setFromAxisAngle(_yAxis, h); }
+          if (d.bot) {
+            // stance: a man who is shooting or being shot at from a standstill drops to one knee
+            const want = u.speed < 1 && (u.wt[0] || g.tick - u.lastHit < 100) ? 1 : 0;
+            kn = this.pose.get(u) || 0; if (kn !== want) { kn += clamp(want - kn, -dt * 4, dt * 5); this.pose.set(u, kn); }
+            if (u.speed > 1) y += Math.abs(Math.sin(T * 11 + u.id * 1.7)) * 0.1;
+            y -= 0.93 * kn; _q.setFromAxisAngle(_yAxis, h);
+          }
           else {
             map.normalAt(x, z, _n); _q.setFromUnitVectors(_up, _n); _q2.setFromAxisAngle(_yAxis, h); _q.multiply(_q2);
             // running gear: the hull shudders and rocks over the ground, squats under acceleration and kicks back when the main gun fires
@@ -876,7 +905,7 @@ export class Renderer {
         _p.set(x, y, z); _m.compose(_p, _q, _s);
         const geo = geosFor(d, u.team.id);
         // battle damage shows: hulls and walls blacken as they are shot up
-        const hpf = u.hp / d.hp, soot = d.inf ? 1 : hpf > 0.75 ? 1 : lerp(0.42, 1, hpf / 0.75);
+        const hpf = u.hp / d.hp, soot = d.inf ? 0.86 + (u.id * 7 % 10) * 0.024 : hpf > 0.75 ? 1 : lerp(0.42, 1, hpf / 0.75);
         if (geo.b) { const im = this.im(d, u.team.id, 'b', geo.b); im.setColorAt((im as any)._n, _c.setScalar(soot)); im.setMatrixAt((im as any)._n++, _m); im.count = (im as any)._n; }
         if (geo.t) {
           const tp = d.model.tp!; let th = u.pturret + angDiff(u.pturret, u.turret) * alpha;
@@ -886,7 +915,8 @@ export class Renderer {
             const mv = Math.min(1, u.speed / d.speed * 1.4), idle = !u.wt[0] && mv < 0.1, ph = u.id * 1.7;
             const scan = idle ? Math.sin(T * 0.35 + ph) * 0.45 + Math.sin(T * 0.83 + ph * 2) * 0.2 : 0;
             th += scan * 0.5 + Math.sin(T * 11 + ph) * 0.09 * mv;
-            const lean = mv * 0.2 + (u.wt[0] ? 0.1 : 0) + Math.sin(T * 1.6 + ph) * 0.012, sway = idle ? Math.sin(T * 0.6 + ph) * 0.035 : 0;
+            const w0 = d.weapons[0], since = w0 ? w0.reload - u.cd[0] : 9, rec = w0 && w0.k === 'gun' && since >= 0 && since < 0.1 ? (1 - since / 0.1) * 0.07 : 0;
+            const lean = mv * 0.2 + (u.wt[0] ? 0.12 : 0) + kn * 0.1 - rec + Math.sin(T * 1.6 + ph) * 0.012, sway = idle ? Math.sin(T * 0.6 + ph) * 0.035 : 0;
             const cold = g.snow > 0.3 && !u.sup ? Math.sin(T * 38 + ph) * 0.012 : 0;
             _q2.setFromAxisAngle(_yAxis, th - h); _e.set(lean, 0, sway + cold); _q3.setFromEuler(_e); _q2.multiply(_q3);
             _p.y += Math.sin(T * 1.6 + ph) * 0.02;
@@ -895,7 +925,7 @@ export class Renderer {
               const look = idle ? scan * 0.9 + (Math.sin(T * 0.21 + ph * 3) > 0.86 ? Math.sin(T * 2.2 + ph) * 0.7 : 0) : 0;
               _p.set(0, d.model.neck! - tp[1], 0); _q3.setFromAxisAngle(_yAxis, look); _e.set(idle ? Math.sin(T * 0.4 + ph * 5) * 0.08 : -lean * 0.6, 0, 0); _q4.setFromEuler(_e); _q3.multiply(_q4);
               _m3.compose(_p, _q3, _s); _m3.premultiply(_m2);
-              const hm = this.im(d, u.team.id, 'h', geo.h); hm.setMatrixAt((hm as any)._n++, _m3); hm.count = (hm as any)._n;
+              const hm = this.im(d, u.team.id, 'h', geo.h); hm.setColorAt((hm as any)._n, _c.setScalar(soot)); hm.setMatrixAt((hm as any)._n++, _m3); hm.count = (hm as any)._n;
             }
           } else {
             const w0 = d.weapons[0];
@@ -910,13 +940,17 @@ export class Renderer {
           _p.set(sp[0], sp[1], sp[2]); _m2.compose(_p, _q2, _s); _m2.premultiply(_m);
           const im = this.im(d, u.team.id, 's', geo.s); im.setMatrixAt((im as any)._n++, _m2); im.count = (im as any)._n;
         }
-        if (geo.p) { // legs swing from the hip while walking
-          const sw = u.speed > 1 ? Math.sin(T * 11 + u.id * 1.7) * 0.66 * Math.min(1, u.speed / d.speed * 1.4) : Math.sin(T * 0.6 + u.id * 1.7) * 0.03;
-          _p.set(0, d.model.hip!, 0);
-          _q2.setFromAxisAngle(_xAxis, sw); _m2.compose(_p, _q2, _s); _m2.premultiply(_m);
-          let im = this.im(d, u.team.id, 'p', geo.p); im.setMatrixAt((im as any)._n++, _m2); im.count = (im as any)._n;
-          _q2.setFromAxisAngle(_xAxis, -sw); _m2.compose(_p, _q2, _s); _m2.premultiply(_m);
-          im = this.im(d, u.team.id, 'q', geo.q!); im.setMatrixAt((im as any)._n++, _m2); im.count = (im as any)._n;
+        if (geo.p) {
+          // gait: each thigh swings from the hip and the knee folds as the leg comes forward; kneeling plants the right knee and props the left foot ahead
+          const mv = Math.min(1, u.speed / d.speed * 1.4), ph = T * 11 + u.id * 1.7, hip = d.model.hip!, knee = d.model.knee!;
+          for (let sd = 0; sd < 2; sd++) {
+            const f = ph + sd * Math.PI;
+            const th = lerp(Math.sin(f) * 0.62 * mv + (1 - mv) * Math.sin(T * 0.6 + u.id) * 0.02, sd ? 0.22 : -1.38, kn), kb = lerp(Math.max(0, -Math.cos(f)) * 1.05 * mv + 0.06, sd ? 1.5 : 1.42, kn);
+            _p.set(0, hip, 0); _q2.setFromAxisAngle(_xAxis, th); _m2.compose(_p, _q2, _s); _m2.premultiply(_m);
+            let im = this.im(d, u.team.id, sd ? 'q' : 'p', sd ? geo.q! : geo.p); im.setColorAt((im as any)._n, _c.setScalar(soot)); im.setMatrixAt((im as any)._n++, _m2); im.count = (im as any)._n;
+            _p.set(0, knee - hip, 0); _q2.setFromAxisAngle(_xAxis, kb); _m3.compose(_p, _q2, _s); _m3.premultiply(_m2);
+            im = this.im(d, u.team.id, sd ? 'l' : 'k', sd ? geo.l! : geo.k!); im.setColorAt((im as any)._n, _c.setScalar(soot)); im.setMatrixAt((im as any)._n++, _m3); im.count = (im as any)._n;
+          }
         }
         if (!paused) {
           // welding sparks where something is being built or repaired
@@ -947,6 +981,20 @@ export class Renderer {
                 this.smoke.spawn(bx + sxn * sd * d.r * 0.55, y + 0.5, bz + szn * sd * d.r * 0.55, -Math.sin(h) * v + (Math.random() - 0.5) * 5, 5 + Math.random() * 9 * (0.5 + mu), -Math.cos(h) * v + (Math.random() - 0.5) * 5, 0.7 + Math.random() * 0.5, 0.45 + Math.random() * 0.5, cc * 1.25, cc, cc * 0.75, 0.95, 0, 0.2, 34);
               }
               if (Math.random() < 0.16) { const gcol = 0.1 + Math.random() * 0.06; this.smoke.spawn(bx + sxn * d.r * 0.3, y + d.h * 0.45, bz + szn * d.r * 0.3, -Math.sin(h) * 3, 3 + Math.random() * 3, -Math.cos(h) * 3, 1 + Math.random() * 0.8, 1.6, gcol, gcol, gcol, 0.32, 2.4, 0.8, -0.6); }
+            }
+          }
+          if (d.cls === 'air' && !d.kami) {
+            // flares punched out when the aircraft is being hit; contrails behind fast jets; rotor wash under helicopters
+            if (g.tick - u.lastHit < 70 && Math.random() < 0.3) { const sd = Math.random() < 0.5 ? 1 : -1; fireP.spawn(x, y - 1, z, Math.cos(h) * 22 * sd, -4, -Math.sin(h) * 22 * sd, 1.5, 2.6, 3.6, 3.2, 2.2, 1, 0, 0.5, 16); this.smoke.spawn(x, y - 1, z, Math.cos(h) * 10 * sd, -2, -Math.sin(h) * 10 * sd, 1.6, 1.6, 0.9, 0.9, 0.9, 0.3, 2, 0.6); }
+            if (!d.hover && d.speed >= 55 && Math.random() < 0.5) this.smoke.spawn(x - Math.sin(h) * d.r * 1.4, y, z - Math.cos(h) * d.r * 1.4, 0, 0, 0, 2.6, 1.1, 0.95, 0.96, 0.98, 0.2, 1.4, 0);
+            if (d.hover && d.r > 3 && Math.random() < 0.5) { const a = Math.random() * 6.283, gy = map.groundY(x, z); _c.setHex(map.biome.low); const sn = g.snow; this.smoke.spawn(x + Math.cos(a) * 5, gy + 0.6, z + Math.sin(a) * 5, Math.cos(a) * 26, 1.5, Math.sin(a) * 26, 0.8 + Math.random() * 0.5, 3.2, lerp(_c.r * 0.6 + 0.26, 0.92, sn), lerp(_c.g * 0.6 + 0.25, 0.94, sn), lerp(_c.b * 0.6 + 0.2, 0.96, sn), 0.2, 2.8, 2.2); }
+          }
+          if (d.cls === 'ground' && !d.bot && u.speed > 3 && Math.random() < 0.5) {
+            // tracks and tyres plough a lasting trail: bare churned earth through snow and across fields
+            const hn = map.hn, am = this.terrainMatAttr.array as Float32Array, col = this.terrainCol.array as Float32Array;
+            for (const sd of [-1, 1]) {
+              const tx = x + Math.cos(h) * sd * d.r * 0.5, tz = z - Math.sin(h) * sd * d.r * 0.5, k = Math.round(tz / VS) * hn + Math.round(tx / VS);
+              if (k > 0 && k < am.length && am[k] < 0.8) { am[k] = Math.min(0.8, am[k] + 0.22); col[k * 3] *= 0.93; col[k * 3 + 1] *= 0.92; col[k * 3 + 2] *= 0.91; this.trackDirty = true; }
             }
           }
           if (d.cls === 'air' && !d.hover && d.speed >= 55 && Math.random() < 0.6) fireP.spawn(x - Math.sin(h) * d.r, y, z - Math.cos(h) * d.r, 0, 0, 0, 0.25, 1.6, 2.4, 1.4, 0.5, 0.7);
@@ -1082,12 +1130,14 @@ export class Renderer {
         const j0 = Math.max(1, Math.floor((cr.z - cr.r) / VS) - 1), j1 = Math.min(hn - 2, Math.ceil((cr.z + cr.r) / VS) + 1);
         for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
           const k = j * hn + i; pos.setY(k, H[k]);
+          if (this.waterDepth) this.waterDepth.depth[k] = clamp((map.waterY - H[k]) / 13, 0, 1) * 255;
           const dx = H[k + 1] - H[k - 1], dz = H[k + hn] - H[k - hn], l = Math.hypot(dx, 2 * VS, dz);
           nrm.setXYZ(k, -dx / l, 2 * VS / l, -dz / l);
           const d = Math.hypot(i * VS - cr.x, j * VS - cr.z) / cr.r;
           if (d < 1) { const w = (1 - d) * 0.8, a = 0.05 + Math.random() * 0.04; col[k * 3] = lerp(col[k * 3], a * 1.2, w); col[k * 3 + 1] = lerp(col[k * 3 + 1], a, w); col[k * 3 + 2] = lerp(col[k * 3 + 2], a * 0.85, w); }
         }
       }
+      if (this.waterDepth) this.waterDepth.dTex.needsUpdate = true;
       g.craters.length = 0; pos.needsUpdate = true; nrm.needsUpdate = true; this.terrainCol.needsUpdate = true;
     }
     if (g.burnt.length) {
@@ -1112,6 +1162,7 @@ export class Renderer {
       this.smoke.windX = Math.sin(g.windDir) * g.wind * 7; this.smoke.windZ = Math.cos(g.windDir) * g.wind * 7;
       this.updateDebris(dt); this.fire.update(dt); this.smoke.update(dt);
     }
+    this.trackT -= dt; if (this.trackDirty && this.trackT <= 0) { this.trackDirty = false; this.trackT = 0.4; this.terrainMatAttr.needsUpdate = true; this.terrainCol.needsUpdate = true; }
     for (const c of g.civDirty) this.world.refresh(c);
     g.civDirty.length = 0;
     this.world.update(g, me, dt, T, this.night, paused);

@@ -96,7 +96,7 @@ export function makeWater(map: GameMap, fogTex: THREE.Texture, sunDir: THREE.Vec
   });
   const geo = new THREE.PlaneGeometry(map.size, map.size); geo.rotateX(-Math.PI / 2);
   const mesh = new THREE.Mesh(geo, mat); mesh.position.set(map.size / 2, map.waterY, map.size / 2); mesh.renderOrder = 4;
-  return { mesh, uni };
+  return { mesh, uni, depth, dTex };
 }
 
 // ───────────────────────── vegetation ─────────────────────────

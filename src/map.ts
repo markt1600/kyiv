@@ -243,6 +243,7 @@ export class GameMap {
       const i = cz * n + cx, x = cx * CELL, z = cz * CELL;
       const h = H[(cz * 2 + 1) * hn + cx * 2 + 1];
       if (h < WY + 1 || this.block[i] || this.road[i]) continue;
+      if (this.bridges.some(b => Math.hypot(b.x - x, b.z - z) < b.len / 2 + 14)) continue;
       let ds = 1e9; for (const s of this.starts) ds = Math.min(ds, Math.hypot(s.x - x, s.z - z));
       const woods = 0.5 - 0.1 * smooth(0.2, 0.6, (x + z) / size / 2 + 0.1) + 0.06 * this.urban[i];
       let f = fbm(x / 150 + 9.1, z / 150 + 3.7, seed + 77, 4);

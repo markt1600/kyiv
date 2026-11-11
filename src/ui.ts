@@ -230,6 +230,7 @@ export class UI {
         case 'r': this.setMode('repair'); break;
         case 'e': this.setMode('reclaim'); break;
         case 'm': this.setMode('move'); break;
+        case 't': this.r.flir = !this.r.flir; this.toast(this.r.flir ? (this.r.composer ? 'Thermal drone feed' : 'Thermal view needs Medium or High graphics') : 'Daylight camera'); break;
         case 'v': this.showSupply = !this.showSupply; this.toast('Supply range overlay ' + (this.showSupply ? 'on' : 'off')); break;
         case 's': for (const u of this.mine()) { this.game.clearOrders(u); if (u.def.factory) u.queue.length = 0; } this.audio.ui('click'); break;
         case 'h': { const p = this.me.prime; if (p) { this.select([p], false); this.r.cam.x = p.x; this.r.cam.z = p.z; } break; }
@@ -502,6 +503,14 @@ export class UI {
         r.project(wx, map.groundY(wx, wz) + 1, wz, p);
         if (p.ok) { ctx.fillStyle = this.free(def, c.cx, c.cz) ? 'rgba(80,255,140,0.8)' : 'rgba(255,70,50,0.8)'; ctx.fillRect(p.x - 5, p.y - 5, 10, 10); }
       }
+    }
+    if (r.flir && r.composer) { // drone-feed reticle and telemetry
+      const cx = W / 2, cy = Hh / 2; ctx.strokeStyle = 'rgba(235,245,235,0.85)'; ctx.fillStyle = 'rgba(235,245,235,0.85)'; ctx.lineWidth = 1.5; ctx.beginPath();
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.moveTo(cx + dx * 14, cy + dy * 14); ctx.lineTo(cx + dx * 60, cy + dy * 60); }
+      for (const [sx, sy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) { const bx = cx + sx * (W / 2 - 70), by = cy + sy * (Hh / 2 - 110); ctx.moveTo(bx, by - sy * 30); ctx.lineTo(bx, by); ctx.lineTo(bx - sx * 30, by); }
+      ctx.stroke(); ctx.font = '12px ui-monospace, Menlo, monospace';
+      const c = r.cam; ctx.fillText(`WHOT  FOV ${(c.dist / 12).toFixed(0)}  ALT ${(c.dist * Math.sin(c.pitch) * 3).toFixed(0)} m  HDG ${(((-c.yaw * 57.3) % 360 + 360) % 360).toFixed(0).padStart(3, '0')}`, 80, 96);
+      ctx.fillText(`50.${(4500 - c.z * 0.4).toFixed(0)}N 030.${(5200 + c.x * 0.4).toFixed(0)}E   ${g.date.toISOString().slice(0, 10)}  REC ●`, 80, 114);
     }
     const d = this.drag;
     if (d && d.on) {

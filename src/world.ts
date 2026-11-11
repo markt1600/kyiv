@@ -269,7 +269,7 @@ const COATS = [0x3a4a6a, 0x7a2f2a, 0x4a4a4a, 0x8a7a5a, 0x2f5a4a, 0xa0a0a8, 0x5a3
 export class World {
   private map: GameMap; private meshes: (THREE.Mesh | null)[] = []; private mat: THREE.MeshStandardMaterial; private ruinMat: THREE.MeshStandardMaterial;
   private scene: THREE.Scene; private bodyIM: THREE.InstancedMesh; private bloodIM: THREE.InstancedMesh; private civIM: THREE.InstancedMesh;
-  private uSnow = { value: 0 }; private t = 0; private bridges: THREE.Mesh[] = []; private bridgeMat!: THREE.Material; private quality = 0; private hitMat: THREE.MeshStandardMaterial;
+  private uSnow = { value: 0 }; private t = 0; private bdead: boolean[] = []; private bridges: THREE.Mesh[] = []; private bridgeMat!: THREE.Material; private quality = 0; private hitMat: THREE.MeshStandardMaterial;
 
   constructor(scene: THREE.Scene, map: GameMap, quality: number) {
     this.map = map; this.scene = scene;
@@ -327,6 +327,7 @@ export class World {
     this.t -= dt;
     if (this.t <= 0) {
       this.t = 0.4;
+      map.bridges.forEach((b, i) => { if (b.dead && !this.bdead[i]) { this.bdead[i] = true; this.dropBridge(i); } });
       map.bridges.forEach((b, i) => { if (!this.bridges[i].visible && (vis[map.cellOf(b.x, b.z)] & 1)) this.bridges[i].visible = true; });
       for (const c of map.civ) { const m = this.meshes[c.id]; if (m && !m.visible && (vis[map.cellOf(c.x, c.z)] & 1)) m.visible = true; }
     }
