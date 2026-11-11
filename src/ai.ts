@@ -1,6 +1,6 @@
 // Skirmish AI: economy planner, production manager and squad-based military.
 import { CELL, Spot } from './map';
-import { DEFS, UnitDef } from './defs';
+import { DEFS, TECHS, UnitDef } from './defs';
 import { Game, Team, Unit, TICK } from './sim';
 
 interface Params {
@@ -33,39 +33,18 @@ export class AI {
   private enemyAir = 0; private enemyDef = 0; private lastDefend = -999; private lastRaid = 0; private lastScout = 0;
   private rallyX = 0; private rallyZ = 0; private firstFac: string;
   private rng: () => number;
-  private yard: { cx: number; cz: number } | null = null;
+  private labs: Unit[] = []; private kamis: Unit[] = []; private enemyDrones = 0;
 
   constructor(game: Game, team: Team) {
     this.game = game; this.team = team; this.P = LEVELS[team.level];
     this.phase = (team.id * 7) % this.P.think;
     this.rng = game.rng;
-    this.firstFac = this.rng() < 0.5 ? 'foundry' : 'works';
-    const c = game.map.size / 2, dx = c - team.startX, dz = c - team.startZ, l = Math.hypot(dx, dz) || 1;
+    this.firstFac = 'barracks';
+    const en = game.teams.find(t => t.ally !== team.ally) || team;
+    const dx = en.startX - team.startX, dz = en.startZ - team.startZ, l = Math.hypot(dx, dz) || 1;
     this.rallyX = team.startX + dx / l * 110; this.rallyZ = team.startZ + dz / l * 110;
-    this.yard = this.findYard();
   }
 
-  /** a coastal shipyard site on a large body of water near the base */
-  private findYard(): { cx: number; cz: number } | null {
-    const m = this.game.map, n = m.n, def = DEFS.shipyard;
-    const bx = Math.round(this.team.startX / CELL), bz = Math.round(this.team.startZ / CELL);
-    let best: { cx: number; cz: number } | null = null, bd = 1e9;
-    for (let cz = Math.max(2, bz - 34); cz < Math.min(n - 8, bz + 34); cz++) for (let cx = Math.max(2, bx - 34); cx < Math.min(n - 8, bx + 34); cx++) {
-      const r = m.regionW[cz * n + cx];
-      if (r < 0 || m.regionWSize[r] < 500) continue;
-      const d = Math.hypot(cx + 2.5 - bx, cz + 2.5 - bz); if (d >= bd) continue;
-      let ok = true;
-      for (let j = 0; j < def.fh + 3 && ok; j++) for (let i = 0; i < def.fw; i++) if (!m.passW[(cz + j) * n + cx + i]) { ok = false; break; }
-      if (!ok) continue;
-      let shore = false;
-      for (let j = -3; j < def.fh + 3 && !shore; j++) for (let i = -3; i < def.fw + 3; i++) {
-        const x = cx + i, z = cz + j;
-        if (m.inCells(x, z) && m.pass[z * n + x] && m.region[z * n + x] === m.mainRegion) { shore = true; break; }
-      }
-      if (shore) { bd = d; best = { cx, cz }; }
-    }
-    return best;
-  }
   private have(id: string) { return (this.cnt[id] || 0) + (this.pend[id] || 0); }
   private secs() { return this.game.tick / TICK; }
 
@@ -75,29 +54,32 @@ export class AI {
     this.census();
     for (const b of this.builders) this.manageBuilder(b);
     for (const f of this.factories) if (f.built && !f.queue.length && !f.buildee) this.produce(f);
+    this.research();
     this.military();
   }
 
   private census() {
     const g = this.game, tm = this.team;
-    this.cnt = {}; this.pend = {}; this.builders = []; this.factories = []; this.frames = []; this.planes = [];
-    let air = 0, def = 0;
+    this.cnt = {}; this.pend = {}; this.builders = []; this.factories = []; this.frames = []; this.planes = []; this.labs = []; this.kamis = [];
+    let air = 0, def = 0, dr = 0;
     for (const u of g.units) {
       if (u.dead) continue;
       if (u.team !== tm) {
-        if (u.team.ally === tm.ally) continue;
-        if (u.def.cls === 'air' && g.visible(tm, u)) air++;
+        if (u.team.ally === tm.ally || u.def.neutral) continue;
+        if (u.def.cls === 'air' && g.visible(tm, u)) { air++; if (u.def.ew > 0.05) dr++; }
         if (u.def.cls === 'building' && u.def.weapons.length && (u.seen >> tm.id) & 1) def++;
         continue;
       }
       this.cnt[u.def.id] = (this.cnt[u.def.id] || 0) + 1;
       if (!u.built) { if (!u.inFactory && u.def.cls === 'building') this.frames.push(u); continue; }
       const d = u.def;
+      if (d.lab) { this.labs.push(u); continue; }
+      if (d.kami && d.id !== 'fpv') { if (d.id === 'loiter') this.kamis.push(u); continue; }
       if (d.factory) this.factories.push(u);
       else if (d.bp) {
         this.builders.push(u);
         for (const o of u.orders) if (o.type === 'build' && !o.target) this.pend[o.def!.id] = (this.pend[o.def!.id] || 0) + 1;
-      } else if (d.cls !== 'building' && d.weapons.length || d.id === 'kestrel') {
+      } else if (d.cls !== 'building' && d.weapons.length || d.id === 'recon') {
         if (!this.known.has(u)) {
           this.known.add(u);
           if (d.cls === 'air' && !d.hover) { /* planes managed separately */ }
@@ -106,7 +88,7 @@ export class AI {
         if (d.cls === 'air' && !d.hover) this.planes.push(u);
       }
     }
-    this.enemyAir = Math.max(this.enemyAir * 0.995, air); this.enemyDef = def;
+    this.enemyAir = Math.max(this.enemyAir * 0.995, air); this.enemyDef = def; this.enemyDrones = Math.max(this.enemyDrones * 0.995, dr);
     for (const u of this.pool) if (u.dead) this.pool.delete(u);
     for (const u of this.known) if (u.dead) this.known.delete(u);
     for (const u of this.scouts) if (u.dead) this.scouts.delete(u);
@@ -139,8 +121,8 @@ export class AI {
     return null;
   }
   private tryBuild(b: Unit, id: string, ox?: number, oz?: number, r0 = 3, r1 = 26): boolean {
-    if (!b.def.builds.includes(id)) return false;
     const def = DEFS[id], tm = this.team;
+    if (!b.def.builds.includes(id) || !this.game.unlocked(tm, def)) return false;
     const s = this.findSite(def, ox ?? tm.startX, oz ?? tm.startZ, r0, r1);
     if (!s) return false;
     if (def.factory) {
@@ -154,14 +136,14 @@ export class AI {
   private tryMex(b: Unit, maxD: number): boolean {
     const g = this.game, tm = this.team, t = g.tick;
     let best: Spot | null = null, bs = 1e9, up = false;
-    const t2 = b.def.builds.includes('deepext');
+    const t2 = b.def.builds.includes('railhub') && tm.tech.has('t_rail');
     for (const s of g.map.spots) {
       const cl = this.claimed.get(s);
       if (cl && t - cl < 45 * TICK) continue;
       let upgrade = false;
       if (s.taken) {
         const o = s.taken as Unit;
-        if (t2 && o.team === tm && o.def.id === 'extractor' && o.built && tm.incE > 150) upgrade = true; else continue;
+        if (t2 && o.team === tm && o.def.id === 'depot' && o.built && tm.incE > 150) upgrade = true; else continue;
       }
       const db = dist(b.x, b.z, s.x, s.z), dh = dist(tm.startX, tm.startZ, s.x, s.z);
       if (dh > maxD) continue;
@@ -173,7 +155,7 @@ export class AI {
       if (sc < bs) { bs = sc; best = s; up = upgrade; }
     }
     if (!best) return false;
-    const id = up ? 'deepext' : b.def.builds.includes('extractor') ? 'extractor' : 'deepext';
+    const id = up ? 'railhub' : 'depot';
     this.claimed.set(best, t);
     g.giveBuild(b, DEFS[id], best.cx - 1, best.cz - 1);
     this.pend[id] = (this.pend[id] || 0) + 1;
@@ -181,11 +163,11 @@ export class AI {
   }
   private tryEnergy(b: Unit): boolean {
     const tm = this.team;
-    if (b.def.builds.includes('fusion') && tm.incM > 8 && this.have('fusion') < 1 + Math.floor(tm.incM / 14) && (this.pend.fusion || 0) < 1) {
-      if (this.tryBuild(b, 'fusion', undefined, undefined, 6, 30)) return true;
+    if (tm.tech.has('t_rail') && tm.incM > 8 && this.have('plant') < 1 + Math.floor(tm.incM / 14) && (this.pend.plant || 0) < 1) {
+      if (this.tryBuild(b, 'plant', undefined, undefined, 6, 30)) return true;
     }
-    if ((this.pend.solar || 0) + (this.pend.wind || 0) >= 3) return false;
-    return this.tryBuild(b, this.rng() < 0.3 ? 'wind' : 'solar') || this.tryBuild(b, 'solar');
+    if ((this.pend.gen || 0) + (this.pend.wind || 0) >= 3) return false;
+    return this.tryBuild(b, this.rng() < 0.3 ? 'wind' : 'gen') || this.tryBuild(b, 'gen');
   }
 
   private manageBuilder(b: Unit) {
@@ -203,11 +185,11 @@ export class AI {
         g.give(b, { type: 'repair', target: f, x: f.x, z: f.z }); return;
       }
     }
-    const mex = this.have('extractor') + this.have('deepext');
-    const pendE = (this.pend.solar || 0) * 20 + (this.pend.wind || 0) * 12 + (this.pend.fusion || 0) * 600;
+    const mex = this.have('depot') + this.have('railhub');
+    const pendE = (this.pend.gen || 0) * 20 + (this.pend.wind || 0) * 12 + (this.pend.plant || 0) * 600;
     const eProj = tm.incE + pendE;
-    const nFac = this.have('foundry') + this.have('works') + this.have('aerodrome') + this.have('advforge') + this.have('shipyard');
-    const pendMex = (this.pend.extractor || 0) + (this.pend.deepext || 0);
+    const nFac = this.have('barracks') + this.have('motorpool') + this.have('airfield') + this.have('heavy') + this.have('dronehub');
+    const pendMex = (this.pend.depot || 0) + (this.pend.railhub || 0);
     const eNeed = 45 + nFac * 65 + this.builders.length * 12;
     const eLow = eProj < eNeed || eProj < tm.useE * 1.15 + 15 || (tm.energy < tm.stE * 0.15 && tm.incE < tm.useE + pendE);
 
@@ -218,34 +200,37 @@ export class AI {
     if (eLow && this.tryEnergy(b)) return;
     if (pendMex < 1 + P.expand && tm.metal < tm.stM * 0.9 && this.tryMex(b, reach)) return;
 
-    const t2 = b.def.builds.includes('fusion');
-    if (t2) {
-      if (tm.incM > 14 && tm.incE > 500 && this.have('sunlance') < P.heavy && this.tryBuild(b, 'sunlance', this.rallyX, this.rallyZ, 1, 14)) return;
-      if (P.heavy >= 2 && tm.incM > 20 && tm.incE > 900 && this.have('thunderhead') < P.heavy - 1 && this.tryBuild(b, 'thunderhead', undefined, undefined, 5, 26)) return;
-      if (P.heavy >= 2 && tm.incM > 24 && tm.incE > 1100 && this.have('colossus') < 1 + (P.heavy - 2) && this.tryBuild(b, 'colossus', this.rallyX, this.rallyZ, 2, 14)) return;
-      if (tm.incE < 2400 && tm.energy < tm.stE * 0.6 && this.tryEnergy(b)) return;
+    // research and the high end of the ladder
+    if (!prime || secs > 200) {
+      if (!this.have('lab') && secs > 150 && tm.incM > 6 && tm.incE > 90 && this.tryBuild(b, 'lab', undefined, undefined, 5, 26)) return;
+      if (this.have('lab') < 2 && P.heavy >= 2 && tm.incM > 22 && tm.incE > 500 && !this.pend.lab && this.tryBuild(b, 'lab', undefined, undefined, 5, 28)) return;
+    }
+    if (tm.tech.has('t_rail') && tm.incE < 2400 && tm.energy < tm.stE * 0.6 && tm.incM > 10 && this.tryEnergy(b)) return;
+    if (tm.incM > 12 && tm.incE > 400) {
+      if (this.have('sam') < Math.min(1 + P.heavy, 1 + Math.floor(this.enemyAir / 4)) && (this.enemyAir >= 2 || P.heavy >= 2) && !this.pend.sam && this.tryBuild(b, 'sam', undefined, undefined, 4, 22)) return;
+      if (this.enemyDrones >= 2 && this.have('ew') < 1 + P.heavy && !this.pend.ew && this.tryBuild(b, 'ew', this.rallyX, this.rallyZ, 2, 16)) return;
+      if (P.heavy >= 1 && tm.incM > 18 && tm.incE > 800 && this.have('strike') < P.heavy && !this.pend.strike && this.tryBuild(b, 'strike', undefined, undefined, 5, 26)) return;
+      if (P.heavy >= 1 && tm.incM > 22 && tm.incE > 1000 && !this.have('pad') && this.tryBuild(b, 'pad', undefined, undefined, 8, 30)) return;
     }
     // factories
     const floatM = tm.metal > Math.min(700, tm.stM * 0.7);
-    if (nFac < P.maxFac && !(this.pend.foundry || this.pend.works || this.pend.aerodrome || this.pend.advforge) && (tm.incM > 3 + nFac * 5 || floatM) && tm.incE > 40 + nFac * 55) {
+    if (nFac < P.maxFac && !(this.pend.barracks || this.pend.motorpool || this.pend.airfield || this.pend.heavy || this.pend.dronehub) && (tm.incM > 3 + nFac * 5 || floatM) && tm.incE > 40 + nFac * 55) {
       let id = '';
-      if (!this.have('foundry')) id = 'foundry';
-      else if (!this.have('works')) id = 'works';
-      else if (!this.have('advforge') && secs > P.t2At && tm.incM > 9 && tm.incE > 220) id = 'advforge';
-      else if (P.air && !this.have('aerodrome') && secs > 240) id = 'aerodrome';
-      else if (this.have('advforge') && this.have('advforge') < 2 && tm.incM > 22) id = 'advforge';
-      else if (floatM) id = this.rng() < 0.5 ? 'foundry' : 'works';
+      if (!this.have('barracks')) id = 'barracks';
+      else if (!this.have('motorpool')) id = 'motorpool';
+      else if (tm.tech.has('t_fpv') && !this.have('dronehub')) id = 'dronehub';
+      else if (tm.tech.has('t_armor') && !this.have('heavy') && tm.incM > 9 && tm.incE > 220) id = 'heavy';
+      else if (P.air && !this.have('airfield') && secs > 240) id = 'airfield';
+      else if (this.have('heavy') && this.have('heavy') < 2 && tm.incM > 22) id = 'heavy';
+      else if (floatM) id = this.rng() < 0.5 ? 'barracks' : 'motorpool';
       if (id && this.tryBuild(b, id, undefined, undefined, 6, 30)) return;
     }
-    if (this.yard && P.air && secs > 330 && tm.incM > 10 && tm.incE > 200 && !this.have('shipyard') && b.def.builds.includes('shipyard') && !prime) {
-      if (g.canPlace(DEFS.shipyard, this.yard.cx, this.yard.cz, tm)) { g.giveBuild(b, DEFS.shipyard, this.yard.cx, this.yard.cz); this.pend.shipyard = 1; return; }
-    }
     // defences
-    const nDef = this.have('sentry') + this.have('bastion') * 2 + this.have('flak');
+    const nDef = this.have('bunker') + this.have('howitzer') * 2 + this.have('aagun');
     const wantDef = Math.floor((secs / 150) * P.defRate) + (tm.alerts.length ? 1 : 0);
-    if (nDef < Math.min(wantDef, 14) && tm.incM > 5 && !(this.pend.sentry || this.pend.bastion || this.pend.flak)) {
-      let id = this.enemyAir >= 1 && this.have('flak') < 1 + this.enemyAir / 3 ? 'flak' : this.have('sentry') >= 3 && secs > 420 && this.rng() < 0.5 ? 'bastion' : 'sentry';
-      if (!b.def.builds.includes(id)) id = 'sentry';
+    if (nDef < Math.min(wantDef, 14) && tm.incM > 5 && !(this.pend.bunker || this.pend.howitzer || this.pend.aagun)) {
+      let id = this.enemyAir >= 1 && this.have('aagun') < 1 + this.enemyAir / 3 ? 'aagun' : this.have('bunker') >= 3 && secs > 420 && this.rng() < 0.5 ? 'howitzer' : 'bunker';
+      if (!b.def.builds.includes(id)) id = 'bunker';
       const a = this.rng() * 6.283, r = 30 + this.rng() * 90;
       const ox = this.rng() < 0.6 ? this.rallyX + Math.cos(a) * r : tm.startX + Math.cos(a) * (r + 60);
       const oz = this.rng() < 0.6 ? this.rallyZ + Math.sin(a) * r : tm.startZ + Math.sin(a) * (r + 60);
@@ -272,9 +257,12 @@ export class AI {
   // ─────────────── production ───────────────
   private produce(f: Unit) {
     const tm = this.team, P = this.P, secs = this.secs();
-    const cons = this.have('wright') + this.have('hauler') + this.have('archwright');
+    const cons = this.have('engineer') + this.have('dozer');
+    const g = this.game, ok = (id: string) => g.unlocked(tm, DEFS[id]);
     const pick = (opts: [string, number][]) => {
+      opts = opts.filter(o => ok(o[0]));
       let tot = 0; for (const o of opts) tot += Math.max(0, o[1]);
+      if (tot <= 0) return '';
       let r = this.rng() * tot;
       for (const o of opts) { r -= Math.max(0, o[1]); if (r <= 0) return o[0]; }
       return opts[0][0];
@@ -282,29 +270,48 @@ export class AI {
     let id = '';
     const wantCons = Math.min(P.maxCons, 1 + this.factories.length + Math.floor(secs / 200));
     const army = this.pool.size + this.squads.reduce((a, s) => a + s.units.length, 0);
+    const winter = g.snow > 0.5 ? 0.5 : 1; // infantry suffer most in the cold
     switch (f.def.id) {
-      case 'foundry':
-        if (cons < wantCons && (cons < 2 || army > cons * 2)) id = 'wright';
-        else id = pick([['jackal', secs < 300 ? 4 : 1.5], ['brawler', 3.5], ['lancer', 2 + this.enemyDef * 0.3], ['skewer', this.enemyAir > 0 ? 1 + this.enemyAir * 0.6 : 0.15]]);
+      case 'barracks':
+        if (cons < wantCons && (cons < 2 || army > cons * 2)) id = 'engineer';
+        else id = pick([['rifle', (secs < 300 ? 5 : 2.5) * winter], ['mortar', 1.6 * winter], ['atgm', 1.6 + this.enemyDef * 0.2], ['manpad', this.enemyAir > 0 ? 1 + this.enemyAir * 0.5 : 0.15]]);
         break;
-      case 'works':
-        if (cons < wantCons && (cons < 2 || army > cons * 2)) id = 'hauler';
-        else id = pick([['dart', this.have('dart') < 2 ? 1.5 : 0.1], ['maul', 4.5], ['howl', 1.2 + this.enemyDef * 0.5]]);
+      case 'motorpool':
+        if (cons < wantCons && cons >= 2 && army > cons * 3) id = 'dozer';
+        else id = pick([['scout', this.have('scout') < 2 ? 1.5 : 0.1], ['ifv', 2.5], ['tank', 4.5], ['spg', 1.2 + this.enemyDef * 0.5], ['spaa', this.enemyAir > 1 ? 0.6 + this.enemyAir * 0.3 : 0.1]]);
         break;
-      case 'aerodrome':
-        id = pick([['kestrel', this.have('kestrel') < 1 ? 1.5 : 0], ['talon', 1.2 + this.enemyAir * 0.5], ['anvil', 2.2], ['vulture', secs > 600 ? 2 : 0.3]]);
+      case 'airfield':
+        id = pick([['recon', this.have('recon') < 1 ? 1.5 : 0], ['fighter', 0.4 + this.enemyAir * 0.5], ['cas', 2.2], ['tb2', 1.5], ['heli', secs > 600 ? 2 : 0.3]]);
         break;
-      case 'shipyard':
-        id = pick([['skiff', 2], ['corsair', 3], ['leviathan', tm.incM > 22 ? 1.5 : 0]]);
-        if (this.have('skiff') + this.have('corsair') + this.have('leviathan') > 4 + P.heavy * 3) id = '';
+      case 'dronehub':
+        id = pick([['fpv', this.have('fpv') < 10 + P.heavy * 6 ? 3 : 0], ['loiter', 2.5], ['ucav', tm.incM > 20 ? 2.5 : 0.5]]);
         break;
-      case 'advforge':
-        if (this.have('archwright') < Math.min(3, 1 + Math.floor(tm.incM / 12))) id = 'archwright';
-        else id = pick([['reaver', 3], ['goliath', 3], ['tempest', 1.2 + this.enemyDef * 0.3]]);
+      case 'heavy':
+        id = pick([['hifv', 3], ['mbt', 3], ['mlrs', 1.2 + this.enemyDef * 0.3]]);
         break;
     }
     if (id) f.queue.push(DEFS[id]);
     if (!f.rally) f.rally = { x: this.rallyX, z: this.rallyZ };
+  }
+
+  // ─────────────── research ───────────────
+  private research() {
+    const g = this.game, tm = this.team, P = this.P;
+    const order = ['t_fpv', 't_armor', 't_rail', 't_iads', 't_loiter', 't_ew', 't_strike', 't_ucav', 't_space'];
+    const max = [3, 6, 9, 9][tm.level];
+    for (const l of this.labs) {
+      if (l.resQ.length) continue;
+      if (l.def.lab === 'pad') {
+        for (const id of ['sat_recon', 'sat_gps']) { const t = TECHS[id]; if (g.canResearch(tm, t) && !g.researching(tm, t) && tm.incM > 18) { l.resQ.push(t); break; } }
+        continue;
+      }
+      for (let i = 0; i < max; i++) {
+        const t = TECHS[order[i]];
+        if (!g.canResearch(tm, t) || g.researching(tm, t)) continue;
+        if (tm.incM > 5 + i * 2.2 - P.heavy && tm.incE > 80 + i * 60) l.resQ.push(t);
+        break;
+      }
+    }
   }
 
   // ─────────────── military ───────────────
@@ -324,7 +331,7 @@ export class AI {
     if (!enemy) return null;
     let best: Unit | null = null, bs = 1e9;
     for (const u of g.units) {
-      if (u.dead || u.team.ally === tm.ally) continue;
+      if (u.dead || u.team.ally === tm.ally || u.def.neutral) continue;
       const seen = u.def.cls === 'building' ? (u.seen >> tm.id) & 1 : g.visible(tm, u) && u.def.cls !== 'air';
       if (!seen) continue;
       let s = dist(x, z, u.x, u.z) * (u.team === enemy ? 1 : 1.6);
@@ -348,15 +355,15 @@ export class AI {
       const ds: Unit[] = [];
       for (const u of this.pool) if (!this.scouts.has(u) && dist(u.x, u.z, al.x, al.z) < 700) ds.push(u);
       if (ds.length) g.moveGroup(ds, al.x, al.z, 'fight', false);
-      for (const p of this.planes) if (p.def.id === 'talon' && dist(p.x, p.z, al.x, al.z) < 800) g.give(p, { type: 'fight', x: al.x, z: al.z });
+      for (const p of this.planes) if (p.def.id === 'fighter' && dist(p.x, p.z, al.x, al.z) < 800) g.give(p, { type: 'fight', x: al.x, z: al.z });
     }
     // scouting
     if (t - this.lastScout > 50 * TICK) {
       this.lastScout = t;
       let sc: Unit | null = null;
       for (const u of this.scouts) { sc = u; break; }
-      if (!sc) for (const u of this.pool) if (u.def.id === 'dart') { sc = u; this.pool.delete(u); this.scouts.add(u); break; }
-      if (!sc) for (const u of this.planes) if (u.def.id === 'kestrel') { sc = u; this.scouts.add(u); break; }
+      if (!sc) for (const u of this.pool) if (u.def.id === 'scout') { sc = u; this.pool.delete(u); this.scouts.add(u); break; }
+      if (!sc) for (const u of this.planes) if (u.def.id === 'recon') { sc = u; this.scouts.add(u); break; }
       if (sc && !sc.orders.length) {
         const pts: { x: number; z: number }[] = [];
         for (const e of g.teams) if (!e.dead && e.ally !== tm.ally) pts.push({ x: e.startX, z: e.startZ });
@@ -389,7 +396,7 @@ export class AI {
     // main waves
     const poolU: Unit[] = []; for (const u of this.pool) if (!this.scouts.has(u)) poolU.push(u);
     const ps = this.str(poolU);
-    const need = Math.min(P.waveMax, P.wave0 + P.waveInc * this.wave);
+    const need = Math.min(P.waveMax, P.wave0 + P.waveInc * this.wave) * (g.snow > 0.5 ? 1.5 : 1);
     if (secs > P.firstAttack && poolU.length >= 3 && (ps >= need || poolU.length > 60)) {
       let cx = 0, cz = 0; for (const u of poolU) { cx += u.x; cz += u.z; } cx /= poolU.length; cz /= poolU.length;
       const en = this.pickEnemy(tm.startX, tm.startZ);
@@ -423,17 +430,21 @@ export class AI {
       }
     }
     // air wing
+    const val = (u: Unit) => u.def.cls !== 'building' ? (u.def.commander && tm.level >= 3 ? 2 : 0) : u.def.id === 'plant' ? 6 : u.def.id === 'aagun' || u.def.id === 'sam' ? 0.3 : u.def.lab ? 4 : u.def.mkE || u.def.wind ? 3 : u.def.extract ? 2.5 : u.def.factory ? 2 : 1;
     if (this.planes.length) {
       const bombers: Unit[] = [];
       for (const p of this.planes) {
         if (p.orders.length || this.scouts.has(p)) continue;
-        if (p.def.id === 'talon') {
+        if (p.def.id === 'fighter') {
           const a = this.rng() * 6.283;
           g.give(p, { type: 'patrol', x: tm.startX + Math.cos(a) * 170, z: tm.startZ + Math.sin(a) * 170, x2: tm.startX - Math.cos(a) * 170, z2: tm.startZ - Math.sin(a) * 170 });
-        } else if (p.def.id === 'anvil' && dist(p.x, p.z, tm.startX, tm.startZ) < 260) bombers.push(p);
+        } else if (p.def.id === 'cas' && dist(p.x, p.z, tm.startX, tm.startZ) < 260) bombers.push(p);
+        else if (p.def.id === 'tb2' || p.def.id === 'ucav') {
+          const tg = this.pickTarget(p.x, p.z, null);
+          if (tg) { g.give(p, { type: 'fight', x: tg.x, z: tg.z }); g.give(p, { type: 'move', x: tm.startX, z: tm.startZ }, true); }
+        }
       }
       if (bombers.length >= (tm.level >= 2 ? 3 : 4)) {
-        const val = (u: Unit) => u.def.cls !== 'building' ? (u.def.commander && tm.level >= 3 ? 2 : 0) : u.def.id === 'fusion' ? 6 : u.def.id === 'flak' ? 0.3 : u.def.mkE || u.def.wind ? 3 : u.def.extract ? 2.5 : u.def.factory ? 2 : 1;
         const tg = this.pickTarget(tm.startX, tm.startZ, null, val);
         if (tg && tg.u) for (const b of bombers) {
           g.give(b, { type: 'attack', target: tg.u, x: tg.x, z: tg.z });
@@ -441,6 +452,13 @@ export class AI {
           g.give(b, { type: 'move', x: tm.startX, z: tm.startZ }, true);
         }
       }
+    }
+    // long-range strike drones go out in salvoes against whatever is worth most
+    const idle = this.kamis.filter(k => !k.orders.length);
+    if (idle.length >= 3) {
+      const tg = this.pickTarget(tm.startX, tm.startZ, null, val);
+      if (tg && tg.u) for (const k of idle) g.give(k, { type: 'attack', target: tg.u, x: tg.x, z: tg.z });
+      else { const en = this.pickEnemy(tm.startX, tm.startZ); if (en) for (const k of idle) g.give(k, { type: 'fight', x: en.startX + (this.rng() - 0.5) * 200, z: en.startZ + (this.rng() - 0.5) * 200 }); }
     }
   }
 }

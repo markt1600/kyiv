@@ -38,11 +38,14 @@ export class Audio {
     this.voices++; s.onended = () => this.voices--;
   }
   /** v: 0..1 loudness from distance */
-  laser(v: number, big = false) {
-    if (v < 0.03 || !this.ok(big ? 'lz2' : 'lz', big ? 0.1 : 0.05)) return;
-    if (big) { this.tone('sawtooth', 320, 60, 0.6, 0.3 * v); this.tone('sine', 1400, 200, 0.5, 0.2 * v); }
-    else this.tone('sawtooth', 1500 + Math.random() * 500, 300, 0.11, 0.07 * v);
+  /** small-arms / autocannon fire: a dry crack with a little body behind it */
+  gun(v: number, heavy = false) {
+    if (v < 0.03 || !this.ok(heavy ? 'gn2' : 'gn', heavy ? 0.07 : 0.045)) return;
+    this.burst(heavy ? 0.13 : 0.07, (heavy ? 0.26 : 0.16) * v, heavy ? 3200 : 5200 + Math.random() * 1800, heavy ? 300 : 900, 0.9);
+    this.tone('square', heavy ? 150 : 230 + Math.random() * 60, 60, heavy ? 0.09 : 0.045, (heavy ? 0.16 : 0.07) * v);
   }
+  /** mortar tube / grenade launcher */
+  thump(v: number) { if (v < 0.03 || !this.ok('th', 0.08)) return; this.tone('sine', 170, 55, 0.16, 0.3 * v); this.burst(0.1, 0.1 * v, 900, 200); }
   cannon(v: number, big: boolean) {
     if (v < 0.03 || !this.ok('cn', 0.06)) return;
     this.burst(big ? 0.5 : 0.22, (big ? 0.5 : 0.28) * v, big ? 900 : 1600, 90); this.tone('sine', big ? 90 : 140, 40, big ? 0.4 : 0.18, 0.4 * v);

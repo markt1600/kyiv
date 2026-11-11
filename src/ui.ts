@@ -1,7 +1,7 @@
 // HUD, input handling, minimap and 2D overlay.
-import { DEFS, TEAM_COLORS, UnitDef } from './defs';
+import { DEFS, LEADERS, nm, TEAM_COLORS, TECH_LIST, TECHS, TechDef, UnitDef } from './defs';
 import { CELL } from './map';
-import { Game, Team, Unit, Wreck, TICK } from './sim';
+import { Game, SUPPLY_R, Team, Unit, Wreck, TICK } from './sim';
 import { Renderer } from './render';
 import { Audio } from './audio';
 import { clamp, fmtTime } from './util';
@@ -31,7 +31,7 @@ export class UI {
   private lastAlert = -999;
   private tmp = { x: 0, y: 0, ok: false };
   private disposers: (() => void)[] = [];
-  private idleIdx = 0; private heat = 0;
+  private idleIdx = 0; private heat = 0; private lastCiv = -999; private showSupply = false;
 
   constructor(game: Game, r: Renderer, me: Team, audio: Audio, icons: Record<string, string>, cb: UICallbacks) {
     this.game = game; this.r = r; this.me = me; this.audio = audio; this.icons = icons; this.cb = cb;
@@ -65,19 +65,45 @@ export class UI {
     // battle heat drives the score: what you can see counts, your own losses count double
     const own = e.u && e.u.team === this.me;
     if (vis || own) this.heat += (e.t === 'beam' ? 0.12 : e.t === 'muzzle' ? 0.22 : e.t === 'boom' ? 0.25 : e.t === 'die' ? (own ? 2.2 : 1.2) : e.t === 'alert' && own ? (e.u.def.commander ? 6 : 1.5) : 0);
+    const me = this.me, fac = me.fac;
     switch (e.t) {
-      case 'beam': a.laser(v, e.big); break;
-      case 'muzzle': if (e.k === 'cannon') a.cannon(v, e.size > 1.5); else a.missile(v); break;
+      case 'beam': a.gun(v, e.size > 11); break;
+      case 'muzzle': if (e.k === 'cannon') a.cannon(v, e.size > 1.5); else if (e.k === 'launch') { a.boom(Math.max(v, 0.25), 26); } else if (e.k === 'thump') a.thump(v); else a.missile(v); break;
       case 'boom': a.boom(v * 0.8, e.size); break;
-      case 'die': a.boom(v, e.size * 2);
-        if (e.u.team === this.me && e.u.def.cls === 'building' && e.u.built) this.toast(e.u.def.name + ' destroyed', 'bad');
+      case 'die':
+        if (!e.u.def.inf) a.boom(v, e.size * 2);
+        if (e.u.team === me && e.u.def.cls === 'building' && e.u.built) this.toast(nm(e.u.def, fac) + ' destroyed', 'bad');
         break;
-      case 'built': if (e.u.team === this.me && (e.u.def.cls === 'building' || e.u.def.tier > 1)) { a.ui('done'); if (e.u.def.tier > 1 || e.u.def.factory) this.toast(e.u.def.name + ' complete', 'good'); } break;
+      case 'built': if (e.u.team === me && (e.u.def.cls === 'building' || e.u.def.tier > 1)) { a.ui('done'); if (e.u.def.tier > 1 || e.u.def.factory || e.u.def.lab) this.toast(nm(e.u.def, fac) + ' complete', 'good'); } break;
+      case 'collapse': if (e.k === 'bridge') { a.boom(Math.max(v, 0.3), 40); this.toast(this.game.map.bridges[e.n].name + ' is down — vehicles cannot cross there', 'bad'); this.drawMinimapBase(); break; }
+        if (e.k === 'part') { a.boom(v, 16); break; } a.boom(Math.max(v, 0.12), 34); if (v > 0.2 || e.civ.kind >= 4) this.toast(e.civ.name + ' destroyed', 'bad'); break;
+      case 'tech':
+        if (e.team === me) { a.ui('done'); this.toast((e.tech.sat ? 'In orbit: ' : 'Research complete: ') + e.tech.name.replace('Launch ', ''), 'good'); this.panelKey = ''; }
+        else if (e.tech.sat) { a.ui('alert'); this.toast('Enemy satellite in orbit — ' + (e.tech.sat === 1 ? 'your positions are exposed' : 'their artillery is now guided'), 'bad'); }
+        break;
+      case 'launch': a.boom(Math.max(v, 0.35), 40); break;
+      case 'civ':
+        if (this.game.tick - this.lastCiv > 12 * TICK) {
+          this.lastCiv = this.game.tick;
+          if (e.team === me) this.toast('Your fire is killing civilians — backers are pulling support', 'bad');
+          else if (fac === 0) this.toast('Civilians are dying under enemy fire', 'bad');
+        }
+        break;
+      case 'season': {
+        const tips: Record<string, string> = {
+          'Winter': 'Winter. Troops beyond reach of a base freeze; armour bogs down in deep snow.',
+          'Spring thaw': 'The thaw. Mud swallows anything that leaves the roads — wheels worst of all.',
+          'Spring': 'The ground is drying out.', 'Summer': 'Summer. Dry ground, long reach — and fires spread fast.',
+          'Autumn': 'Autumn.', 'Autumn mud': 'Autumn rains. The mud is back; keep to the roads.',
+        };
+        this.toast(tips[e.k] || e.k, e.k === 'Winter' || e.k.includes('mud') || e.k.includes('thaw') ? 'bad' : ''); a.ui('alert');
+        break;
+      }
       case 'alert':
         if (e.u.team === this.me && this.game.tick - this.lastAlert > 8 * TICK) {
           const p = this.tmp; this.r.project(e.x, e.y, e.z, p);
           const off = !p.ok || p.x < 0 || p.y < 0 || p.x > innerWidth || p.y > innerHeight;
-          if (off) { this.lastAlert = this.game.tick; a.ui('alert'); this.toast((e.u.def.commander ? 'PRIME' : e.u.def.cls === 'building' ? 'Base' : 'Units') + ' under attack!', 'bad'); }
+          if (off) { this.lastAlert = this.game.tick; a.ui('alert'); this.toast((e.u.def.commander ? LEADERS[fac].toUpperCase() + '’S COMMAND POST' : e.u.def.cls === 'building' ? 'Base' : 'Units') + ' under attack!', 'bad'); }
           this.pings.push({ x: e.x, z: e.z, t: 2.5, c: '#ff4030' });
         }
         break;
@@ -204,6 +230,7 @@ export class UI {
         case 'r': this.setMode('repair'); break;
         case 'e': this.setMode('reclaim'); break;
         case 'm': this.setMode('move'); break;
+        case 'v': this.showSupply = !this.showSupply; this.toast('Supply range overlay ' + (this.showSupply ? 'on' : 'off')); break;
         case 's': for (const u of this.mine()) { this.game.clearOrders(u); if (u.def.factory) u.queue.length = 0; } this.audio.ui('click'); break;
         case 'h': { const p = this.me.prime; if (p) { this.select([p], false); this.r.cam.x = p.x; this.r.cam.z = p.z; } break; }
         case 'Tab': {
@@ -309,11 +336,13 @@ export class UI {
   private free(def: UnitDef, cx: number, cz: number): boolean {
     if (!this.game.canPlace(def, cx, cz, this.me)) return false;
     const w = def.cls === 'building' ? def.fw : 3, h = def.cls === 'building' ? def.fh : 3;
+    if (def.reuse) { for (const u of this.game.units) if (u.team === this.me) for (const o of u.orders) if (o.type === 'build' && !o.target && o.def && o.def.reuse && o.cx === cx && o.cz === cz && o.def !== def) return false; return true; }
     for (const u of this.game.units) {
       if (u.team !== this.me || !u.def.bp) continue;
       for (const o of u.orders) {
         if (o.type !== 'build' || o.target || !o.def) continue;
         if (o.def === def && o.cx === cx && o.cz === cz) continue; // same plan: other builders may join it
+        if (o.def.reuse) continue;
         const ow = o.def.cls === 'building' ? o.def.fw : 3, oh = o.def.cls === 'building' ? o.def.fh : 3;
         if (cx < o.cx! + ow && cx + w > o.cx! && cz < o.cz! + oh && cz + h > o.cz!) return false;
       }
@@ -323,7 +352,10 @@ export class UI {
   private placeCell(sx: number, sy: number): { cx: number; cz: number; ok: boolean } | null {
     const def = this.placing!, p = this.r.pick(sx, sy); if (!p) return null;
     let cx: number, cz: number;
-    if (def.extract) {
+    if (def.reuse) {
+      const c = this.game.nearestCiv(def, p.x, p.z, 70);
+      if (c) { cx = c.cx; cz = c.cz; } else { cx = Math.floor(p.x / CELL); cz = Math.floor(p.z / CELL); }
+    } else if (def.extract) {
       const s = this.game.nearestSpot(p.x, p.z, 60);
       if (s) { cx = s.cx - 1; cz = s.cz - 1; } else { cx = Math.round(p.x / CELL - 1); cz = Math.round(p.z / CELL - 1); }
     } else if (def.cls !== 'building') { cx = Math.floor(p.x / CELL) - 1; cz = Math.floor(p.z / CELL) - 1; }
@@ -334,7 +366,7 @@ export class UI {
   private rowCells(a: { cx: number; cz: number }, b: { cx: number; cz: number }, def: UnitDef) {
     const out: { cx: number; cz: number }[] = [];
     const dx = b.cx - a.cx, dz = b.cz - a.cz;
-    if (def.extract || def.cls !== 'building' || (Math.abs(dx) < def.fw && Math.abs(dz) < def.fh)) return [b];
+    if (def.extract || def.reuse || def.cls !== 'building' || (Math.abs(dx) < def.fw && Math.abs(dz) < def.fh)) return [b];
     const horiz = Math.abs(dx) >= Math.abs(dz), step = horiz ? def.fw : def.fh, n = Math.floor(Math.abs(horiz ? dx : dz) / step);
     for (let i = 0; i <= Math.min(n, 15); i++) out.push({ cx: a.cx + (horiz ? Math.sign(dx) * i * step : 0), cz: a.cz + (horiz ? 0 : Math.sign(dz) * i * step) });
     return out;
@@ -372,8 +404,10 @@ export class UI {
     if (this.placing) {
       const pc = this.placeCell(this.mx, this.my), def = this.placing;
       if (pc) {
-        const wx = def.cls === 'building' ? (pc.cx + def.fw / 2) * CELL : (pc.cx + 1.5) * CELL, wz = def.cls === 'building' ? (pc.cz + def.fh / 2) * CELL : (pc.cz + 1.5) * CELL;
-        this.r.setGhost(def, wx, wz, pc.ok);
+        let wx = def.cls === 'building' ? (pc.cx + def.fw / 2) * CELL : (pc.cx + 1.5) * CELL, wz = def.cls === 'building' ? (pc.cz + def.fh / 2) * CELL : (pc.cz + 1.5) * CELL, yo = 0;
+        const civ = def.reuse ? this.game.civFor(def, pc.cx, pc.cz) : null;
+        if (civ) { wx = civ.x; wz = civ.z; yo = civ.h; }
+        this.r.setGhost(def, wx, wz, pc.ok, yo);
       } else this.r.setGhost(null);
     } else this.r.setGhost(null);
     $('gl').style.cursor = this.placing ? 'cell' : this.mode ? 'crosshair' : 'default';
@@ -411,6 +445,10 @@ export class UI {
         ctx.fill(); ctx.stroke();
         if (d.commander) { ctx.fillStyle = '#fff'; ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); }
       }
+      if (u.team === me && d.cls === 'ground' && !u.sup && g.snow > 0.3 && !u.inFactory) { // out of supply in winter
+        r.project(u.x, u.y + d.h + 4, u.z, p);
+        if (p.ok) { ctx.strokeStyle = '#9fd4ff'; ctx.lineWidth = 1.5; ctx.beginPath(); for (let k = 0; k < 3; k++) { const a = k * 1.047; ctx.moveTo(p.x - Math.cos(a) * 5, p.y - 9 - Math.sin(a) * 5); ctx.lineTo(p.x + Math.cos(a) * 5, p.y - 9 + Math.sin(a) * 5); } ctx.stroke(); }
+      }
       if (sel || u.hp < d.hp - 1 || !u.built) {
         if (!u.built && u.inFactory && !sel && far) continue;
         r.project(u.x, u.y + d.h + 3, u.z, p); if (!p.ok || p.x < 0 || p.y < 0 || p.x > W || p.y > Hh) continue;
@@ -436,6 +474,18 @@ export class UI {
           if (p.ok) { ctx.strokeStyle = '#ffe060'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y - 18); ctx.stroke(); ctx.fillStyle = '#ffe060'; ctx.beginPath(); ctx.moveTo(p.x, p.y - 18); ctx.lineTo(p.x + 10, p.y - 14); ctx.lineTo(p.x, p.y - 10); ctx.fill(); }
         }
       }
+    }
+    // supply reach of every base (V toggles; always shown in winter while troops are selected)
+    if (this.showSupply || (g.snow > 0.3 && this.selected.size > 0)) {
+      ctx.strokeStyle = 'rgba(150,210,255,0.35)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 6]);
+      for (const u of g.units) {
+        if (u.team !== me || u.dead || !u.built || !(u.def.cls === 'building' || u.def.commander)) continue;
+        if (Math.hypot(u.x - r.cam.x, u.z - r.cam.z) > r.cam.dist * 2.2 + SUPPLY_R) continue;
+        ctx.beginPath(); let first = true;
+        for (let k = 0; k <= 32; k++) { const a = k / 32 * 6.283, x = u.x + Math.cos(a) * SUPPLY_R, z = u.z + Math.sin(a) * SUPPLY_R; r.project(x, map.groundY(x, z), z, p); if (!p.ok) { first = true; continue; } if (first) { ctx.moveTo(p.x, p.y); first = false; } else ctx.lineTo(p.x, p.y); }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
     }
     // pings
     for (let i = this.pings.length - 1; i >= 0; i--) {
@@ -473,17 +523,22 @@ export class UI {
     const me = this.me, g = this.game;
     this.setRes('resM', me.metal, me.stM, me.incM, me.useM, me.metal < 5 && me.useM > me.incM * 0.9 && me.stall < 0.9);
     this.setRes('resE', me.energy, me.stE, me.incE, me.useE, me.lowPower || (me.energy < 20 && me.stall < 0.9));
-    $('clock').textContent = fmtTime(g.tick / TICK) + (paused ? '  ❚❚' : '');
-    $('wind').textContent = 'Wind ' + Math.round(g.wind * 100) + '%';
-    $('modeHint').textContent = this.placing ? 'Place ' + this.placing.name + ' — Shift: multiple · drag: row · right-click: cancel'
-      : this.mode ? ({ fight: 'Attack-move', patrol: 'Patrol', guard: 'Guard', repair: 'Repair', reclaim: 'Reclaim area', move: 'Move' } as any)[this.mode] + ' — click target' : '';
+    $('clock').textContent = g.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) + ' · ' + fmtTime(g.tick / TICK) + (paused ? '  ❚❚' : '');
+    const se = $('season'); se.textContent = g.season + (g.snow > 0.3 ? ' ❄' : g.mud > 0.3 ? ' · mud' : ''); se.className = g.snow > 0.3 ? 'cold' : g.mud > 0.3 ? 'mud' : '';
+    se.title = g.snow > 0.3 ? 'Deep snow: troops out of reach of a base freeze, vehicles crawl. Roads stay open.' : g.mud > 0.3 ? 'Mud season: everything off-road is slow, wheeled vehicles worst.' : 'Good going.';
+    const cv = $('civ'); cv.textContent = 'Civilians ' + g.civAlive + '/' + g.civTotal + (me.condemn ? ' · sanctions −' + Math.round(Math.min(0.4, me.condemn * 0.015) * 100) + '%' : me.fac === 0 ? ' · aid +' + me.aid.toFixed(1) : '');
+    cv.className = me.condemn ? 'bad' : '';
+    $('wind').textContent = 'Wind ' + Math.round(g.wind * 100) + '%' + (me.sat ? ' · SAT' + (me.sat & 2 ? '+GPS' : '') : '');
+    $('modeHint').textContent = this.placing ? (this.placing.reuse ? 'Requisition a building for ' : 'Place ') + nm(this.placing, me.fac) + ' — Shift: multiple · drag: row · right-click: cancel'
+      : this.mode ? ({ fight: 'Attack-move', patrol: 'Patrol', guard: 'Guard', repair: 'Repair', reclaim: 'Salvage area', move: 'Move' } as any)[this.mode] + ' — click target' : '';
     this.refreshPanel();
   }
 
   private refreshPanel() {
     const sel = [...this.selected], mine = sel.filter(u => u.team === this.me);
-    const builder = mine.find(u => u.def.builds.length && u.built) || null;
-    const key = sel.map(u => u.id).join(',') + '|' + (this.placing?.id || '') + '|' + this.mode + '|' + (builder?.repeat ? 1 : 0) + '|' + mine.every(u => u.built);
+    const builder = mine.find(u => u.def.builds.length && u.built) || null, fac = this.me.fac, g = this.game;
+    const lab = builder ? null : mine.find(u => u.def.lab && u.built) || null;
+    const key = this.me.tech.size + '|' + sel.map(u => u.id).join(',') + '|' + (this.placing?.id || '') + '|' + this.mode + '|' + (builder?.repeat ? 1 : 0) + '|' + mine.every(u => u.built);
     const info = $('info'), grid = $('buildgrid'), orders = $('orders'), cmd = $('cmd');
     if (key !== this.panelKey) {
       this.panelKey = key;
@@ -498,16 +553,17 @@ export class UI {
         if (mob) {
           ob('Move', 'M', this.mode === 'move', () => this.setMode('move')); ob('Attack', 'A', this.mode === 'fight', () => this.setMode('fight'));
           ob('Patrol', 'P', this.mode === 'patrol', () => this.setMode('patrol')); ob('Guard', 'G', this.mode === 'guard', () => this.setMode('guard'));
-          if (hasBp) { ob('Repair', 'R', this.mode === 'repair', () => this.setMode('repair')); ob('REclaim', 'E', this.mode === 'reclaim', () => this.setMode('reclaim')); }
+          if (hasBp) { ob('Repair', 'R', this.mode === 'repair', () => this.setMode('repair')); ob('SalvagE', 'E', this.mode === 'reclaim', () => this.setMode('reclaim')); }
         }
         ob('Stop', 'S', false, () => { for (const u of this.mine()) { this.game.clearOrders(u); if (u.def.factory) u.queue.length = 0; } });
         if (builder && builder.def.factory) ob('Repeat: ' + (builder.repeat ? 'ON' : 'off'), 'R', builder.repeat, () => { const v = !builder.repeat; for (const u of this.mine()) if (u.def.factory) u.repeat = v; this.panelKey = ''; });
         if (builder) for (const id of builder.def.builds) {
-          const def = DEFS[id], b = document.createElement('div');
-          b.className = 'bbtn' + (this.placing === def ? ' sel' : ''); b.dataset.id = id;
-          b.innerHTML = `<img src="${this.icons[id] || ''}" draggable="false"><span class="cnt"></span>${def.tier > 1 ? '<span class="t2">T' + def.tier + '</span>' : ''}<span class="lbl">${def.name}</span>`;
+          const def = DEFS[id], b = document.createElement('div'), locked = !g.unlocked(this.me, def);
+          b.className = 'bbtn' + (this.placing === def ? ' sel' : '') + (locked ? ' locked' : ''); b.dataset.id = id;
+          b.innerHTML = `<img src="${this.icons[id] || ''}" draggable="false"><span class="cnt"></span>${locked ? '<span class="lock">🔒</span>' : def.reuse ? '<span class="t2">REQ</span>' : def.tier > 1 ? '<span class="t2">T' + def.tier + '</span>' : ''}<span class="lbl">${nm(def, fac)}</span>`;
           b.onmousedown = e => {
             e.preventDefault(); this.audio.init();
+            if (locked) { this.audio.ui('error'); this.toast('Requires research: ' + TECHS[def.req].name, 'bad'); return; }
             if (builder.def.factory) {
               const facs = this.mine().filter(u => u.def === builder.def);
               for (const f of facs) {
@@ -521,6 +577,21 @@ export class UI {
           b.onmouseenter = () => this.showTip(def, b); b.onmouseleave = () => $('tooltip').classList.add('hidden');
           grid.appendChild(b);
         }
+        if (lab) for (const t of TECH_LIST) {
+          if (t.at !== lab.def.lab) continue;
+          const b = document.createElement('div'), done = this.me.tech.has(t.id), can = g.canResearch(this.me, t);
+          b.className = 'bbtn tech' + (done ? ' done' : can ? '' : ' locked'); b.dataset.tech = t.id;
+          b.innerHTML = `<span class="tn">${t.name}</span><span class="cnt"></span>${done ? '<span class="lock">✓</span>' : can ? '' : '<span class="lock">🔒</span>'}`;
+          b.onmousedown = e => {
+            e.preventDefault(); this.audio.init();
+            if (e.button === 2) { for (const l of this.mine()) { const i = l.resQ.indexOf(t); if (i >= 0) { l.resQ.splice(i, 1); if (i === 0) l.resP = 0; } } this.audio.ui('click'); return; }
+            if (done || !can || g.researching(this.me, t)) { this.audio.ui('error'); if (!done && !can) this.toast('Requires: ' + t.req.filter(r => !this.me.tech.has(r)).map(r => TECHS[r].name).join(', '), 'bad'); return; }
+            lab.resQ.push(t); this.audio.ui('click');
+          };
+          b.oncontextmenu = e => e.preventDefault();
+          b.onmouseenter = () => this.showTechTip(t, b); b.onmouseleave = () => $('tooltip').classList.add('hidden');
+          grid.appendChild(b);
+        }
       }
       $('tooltip').classList.add('hidden');
     }
@@ -529,28 +600,37 @@ export class UI {
       const counts: Record<string, number> = {}; for (const d of builder.queue) counts[d.id] = (counts[d.id] || 0) + 1;
       for (const el of Array.from(grid.children) as HTMLElement[]) (el.querySelector('.cnt') as HTMLElement).textContent = counts[el.dataset.id!] ? '' + counts[el.dataset.id!] : '';
     }
-    for (const el of Array.from(grid.children) as HTMLElement[]) { const d = DEFS[el.dataset.id!]; el.classList.toggle('poor', this.me.metal < d.m * 0.1 && this.me.incM < 1); }
+    if (lab) for (const el of Array.from(grid.children) as HTMLElement[]) {
+      const t = TECHS[el.dataset.tech!]; let txt = '';
+      for (const l of g.units) if (l.team === this.me && !l.dead) { const i = l.resQ.indexOf(t); if (i === 0) txt = Math.floor(l.resP * 100) + '%'; else if (i > 0) txt = 'queued'; }
+      (el.querySelector('.cnt') as HTMLElement).textContent = txt; el.classList.toggle('sel', !!txt);
+    }
+    else for (const el of Array.from(grid.children) as HTMLElement[]) { const d = DEFS[el.dataset.id!]; el.classList.toggle('poor', this.me.metal < d.m * 0.1 && this.me.incM < 1); }
     // info
     if (!sel.length) { if (info.innerHTML) info.innerHTML = ''; return; }
     if (sel.length === 1) {
       const u = sel[0], d = u.def, w = d.weapons[0];
       let st = '';
-      if (u.team !== this.me) st += `<span>Owner <b style="color:${hex(TEAM_COLORS[u.team.id])}">enemy</b></span>`;
+      if (u.team !== this.me) st += d.neutral ? '<span><b>Right-click with armed units to bring it down</b></span>' : `<span>Owner <b style="color:${hex(TEAM_COLORS[u.team.id])}">enemy</b></span>`;
       if (!u.built) st += `<span>Building <b>${Math.floor(u.progress * 100)}%</b></span>`;
       if (w) st += `<span>Damage <b>${Math.round(d.weapons.reduce((a, x) => a + x.dmg * (x.burst || 1) / x.reload, 0))}/s</b></span><span>Range <b>${w.range}</b></span>`;
       if (d.speed) st += `<span>Speed <b>${d.speed}</b></span>`;
       if (d.bp) st += `<span>Build power <b>${d.bp}</b></span>`;
-      if (d.mkE) st += `<span>Energy <b>+${d.mkE}</b></span>`;
-      if (d.wind) st += `<span>Energy <b>+${(d.wind * this.game.wind).toFixed(1)}</b></span>`;
-      if (d.extract && u.spot) st += `<span>Metal <b>+${(u.spot.rich * d.extract).toFixed(1)}</b></span>`;
-      if (d.conv) st += `<span>Converts <b>${d.conv}E → 1M</b></span>`;
+      if (d.mkE) st += `<span>Power <b>+${d.mkE}</b></span>`;
+      if (d.wind) st += `<span>Power <b>+${(d.wind * this.game.wind).toFixed(1)}</b></span>`;
+      if (d.extract && u.spot) st += `<span>Supplies <b>+${(u.spot.rich * d.extract).toFixed(1)}</b></span>`;
+      if (d.conv) st += `<span>Converts <b>${d.conv} power → 1 supply</b></span>`;
+      if (d.jam) st += `<span>Jamming radius <b>${d.jam}</b></span>`;
+      if (d.kami) st += `<span>Warhead <b>${d.kami.d}</b></span>`;
+      if (u.team === this.me && d.lab) st += u.resQ.length ? `<span>${d.lab === 'pad' ? 'Countdown' : 'Researching'} <b>${u.resQ[0].name} ${Math.floor(u.resP * 100)}%</b></span>` : '<span><b>Idle — choose a programme</b></span>';
+      if (u.team === this.me && d.cls === 'ground') { const mob = this.game.mobility(u); if (this.game.freezing(u)) st += '<span style="color:#9fd4ff"><b>Out of supply — freezing</b></span>'; else if (mob < 0.95) st += `<span>Going <b>${Math.round(mob * 100)}%</b></span>`; }
       if (u.team === this.me && d.factory) st += `<span>Queue <b>${u.queue.length}</b></span>` + (u.buildee ? `<span>Now <b>${u.buildee.def.name} ${Math.floor(u.buildee.progress * 100)}%</b></span>` : '');
-      if (u.team === this.me && u.orders.length) st += `<span>Order <b>${u.orders[0].type}${u.orders[0].def ? ' ' + u.orders[0].def.name : ''}${u.orders.length > 1 ? ' +' + (u.orders.length - 1) : ''}</b></span>`;
-      info.innerHTML = `<div class="nm">${d.name}</div><div class="ds">${d.desc}</div><div class="hp"><i style="width:${clamp(u.hp / d.hp * 100, 0, 100)}%"></i></div><div class="st"><span>HP <b>${Math.ceil(u.hp)} / ${d.hp}</b></span>${st}</div>`;
+      if (u.team === this.me && u.orders.length) st += `<span>Order <b>${u.orders[0].type}${u.orders[0].def ? ' ' + nm(u.orders[0].def, fac) : ''}${u.orders.length > 1 ? ' +' + (u.orders.length - 1) : ''}</b></span>`;
+      info.innerHTML = `<div class="nm">${d.neutral ? this.game.map.bridges[u.cx].name : nm(d, u.team.fac)}</div><div class="ds">${d.desc}</div><div class="hp"><i style="width:${clamp(u.hp / d.hp * 100, 0, 100)}%"></i></div><div class="st"><span>HP <b>${Math.ceil(u.hp)} / ${d.hp}</b></span>${st}</div>`;
     } else {
       const by = new Map<UnitDef, number>(); for (const u of sel) by.set(u.def, (by.get(u.def) || 0) + 1);
       let h = `<div class="nm">${sel.length} units</div><div class="chips">`;
-      for (const [d, n] of by) h += `<span class="chip" data-id="${d.id}"><img src="${this.icons[d.id] || ''}">${n}× ${d.name}</span>`;
+      for (const [d, n] of by) h += `<span class="chip" data-id="${d.id}"><img src="${this.icons[d.id] || ''}">${n}× ${nm(d, fac)}</span>`;
       info.innerHTML = h + '</div>';
       for (const c of Array.from(info.querySelectorAll('.chip')) as HTMLElement[]) c.onclick = () => this.select(sel.filter(u => u.def.id === c.dataset.id), false);
     }
@@ -558,8 +638,19 @@ export class UI {
 
   private showTip(def: UnitDef, el: HTMLElement) {
     const t = $('tooltip'), w = def.weapons[0];
-    t.innerHTML = `<b>${def.name}</b><div class="d">${def.desc}</div><div class="c">Metal ${def.m} · Energy ${def.e}</div>` +
-      `<div class="d">HP ${def.hp}${w ? ' · ' + Math.round(def.weapons.reduce((a, x) => a + x.dmg * (x.burst || 1) / x.reload, 0)) + ' dmg/s · range ' + w.range : ''}${def.speed ? ' · speed ' + def.speed : ''}</div>`;
+    t.innerHTML = `<b>${nm(def, this.me.fac)}</b><div class="d">${def.desc}</div><div class="c">Supplies ${def.m} · Power ${def.e}</div>` +
+      `<div class="d">HP ${def.hp}${w && w.k !== 'ram' ? ' · ' + Math.round(def.weapons.reduce((a, x) => a + x.dmg * (x.burst || 1) / x.reload, 0)) + ' dmg/s · range ' + w.range : ''}${def.speed ? ' · speed ' + def.speed : ''}</div>` +
+      (def.req && !this.me.tech.has(def.req) ? `<div class="c" style="color:#ff8a70">Requires research: ${TECHS[def.req].name}</div>` : '');
+    this.placeTip(el);
+  }
+  private showTechTip(td: TechDef, el: HTMLElement) {
+    const need = td.req.filter(r => !this.me.tech.has(r)).map(r => TECHS[r].name);
+    $('tooltip').innerHTML = `<b>${td.name}</b><div class="d">${td.desc}</div><div class="c">Supplies ${td.m} · Power ${td.e}</div>` +
+      (need.length ? `<div class="c" style="color:#ff8a70">Requires: ${need.join(', ')}</div>` : '') + '<div class="d">Left-click to start · right-click to cancel</div>';
+    this.placeTip(el);
+  }
+  private placeTip(el: HTMLElement) {
+    const t = $('tooltip');
     t.classList.remove('hidden');
     const b = el.getBoundingClientRect(), tb = t.getBoundingClientRect();
     t.style.left = clamp(b.left + b.width / 2 - tb.width / 2, 4, innerWidth - tb.width - 4) + 'px'; t.style.top = (b.top - tb.height - 6) + 'px';
@@ -569,13 +660,19 @@ export class UI {
   private drawMinimapBase() {
     const m = this.game.map, n = m.n, ctx = this.mmBase.getContext('2d')!, img = ctx.createImageData(n, n), b = m.biome;
     const rgb = (c: number) => [(c >> 16) & 255, (c >> 8) & 255, c & 255];
-    const lo = rgb(b.low), mi = rgb(b.mid), hi = rgb(b.high), wa = rgb(b.waterCol), ro = rgb(b.rock);
+    const lo = rgb(b.low), mi = rgb(b.mid), hi = rgb(b.high), wa = rgb(b.waterCol);
     for (let z = 0; z < n; z++) for (let x = 0; x < n; x++) {
       const h = m.heights[(z * 2 + 1) * m.hn + x * 2 + 1], hl = m.heights[(z * 2 + 1) * m.hn + x * 2], hu = m.heights[(z * 2) * m.hn + x * 2 + 1];
-      const t = clamp(h / 64, 0, 1); let c: number[];
-      if (h < m.waterY) c = wa;
-      else { c = t < 0.5 ? lo.map((v, i) => v + (mi[i] - v) * t * 2) : mi.map((v, i) => v + (hi[i] - v) * (t - 0.5) * 2); if (!m.pass[z * n + x]) c = c.map((v, i) => v * 0.5 + ro[i] * 0.5); }
-      const sh = clamp(1 + (h - hl + h - hu) * 0.06, 0.6, 1.4), i = (z * n + x) * 4;
+      const t = clamp((h - 12) / 16, 0, 1), k = z * n + x; let c: number[];
+      if (h < m.waterY) c = wa.map(v => v * 1.5);
+      else {
+        c = t < 0.5 ? lo.map((v, i) => v + (mi[i] - v) * t * 2) : mi.map((v, i) => v + (hi[i] - v) * (t - 0.5) * 2);
+        const f = m.forest[k]; c = c.map((v, i) => v * (1 - f * 0.5) + [30, 52, 30][i] * f * 0.5);
+        const u = m.urban[k] * 0.6; c = c.map(v => v * (1 - u) + 112 * u);
+        if (m.road[k]) c = [70, 72, 76];
+        if (m.civAt[k]) c = [44, 44, 46];
+      }
+      const sh = clamp(1 + (h - hl + h - hu) * 0.06, 0.6, 1.4), i = k * 4;
       img.data[i] = c[0] * sh; img.data[i + 1] = c[1] * sh; img.data[i + 2] = c[2] * sh; img.data[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
@@ -584,13 +681,15 @@ export class UI {
     const g = this.game, m = g.map, n = m.n, ctx = this.mctx, W = this.mm.width, k = W / m.size, me = this.me;
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(this.mmBase, 0, 0, W, W);
+    if (g.snow > 0.02) { ctx.fillStyle = `rgba(225,232,240,${g.snow * 0.5})`; ctx.fillRect(0, 0, W, W); } else if (g.mud > 0.02) { ctx.fillStyle = `rgba(60,44,26,${g.mud * 0.3})`; ctx.fillRect(0, 0, W, W); }
+    ctx.fillStyle = '#1a1a1c'; for (const c of m.civ) if (c.state && (me.vis[m.cellOf(c.x, c.z)] & 1)) ctx.fillRect(c.cx * CELL * k, c.cz * CELL * k, c.fw * CELL * k, c.fh * CELL * k);
     const fd = this.mmFogImg.data, vis = me.vis;
     for (let i = 0; i < n * n; i++) { fd[i * 4 + 3] = vis[i] & 2 ? 0 : vis[i] & 1 ? 110 : 235; }
     this.mmFog.getContext('2d')!.putImageData(this.mmFogImg, 0, 0);
     ctx.drawImage(this.mmFog, 0, 0, W, W);
     for (const s of m.spots) if (!s.taken && (vis[m.cellOf(s.x, s.z)] & 1)) { ctx.fillStyle = '#dfe8f2'; ctx.fillRect(s.x * k - 1, s.z * k - 1, 2, 2); }
     for (const u of g.units) {
-      if (u.dead || u.inFactory) continue;
+      if (u.dead || u.inFactory || u.def.neutral) continue;
       const shown = this.r.shown(u);
       if (!shown && !(u.def.cls !== 'building' && (vis[m.cellOf(u.x, u.z)] & 4))) continue;
       const s = u.def.cls === 'building' ? Math.max(2, u.def.fw * CELL * k) : u.def.commander ? 5 : 3;

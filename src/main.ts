@@ -3,16 +3,15 @@ import { AI, DIFFICULTY_NAMES } from './ai';
 import { Renderer, makeIcons } from './render';
 import { UI } from './ui';
 import { Audio } from './audio';
-import { BIOMES } from './map';
-import { TEAM_COLORS, TEAM_NAMES } from './defs';
+import { DEFS, LEADERS, START_DATES, TEAM_COLORS, TEAM_NAMES } from './defs';
 import { fmtTime } from './util';
 
 const $ = (id: string) => document.getElementById(id)!;
 const audio = new Audio();
-let icons: Record<string, string> | null = null;
+const iconSets: (Record<string, string> | null)[] = [null, null];
 
-const opts = { diff: 1, opp: 0, size: 1, biome: 4, wet: 0, gfx: 2, seed: Math.floor(Math.random() * 99999) };
-try { Object.assign(opts, JSON.parse(localStorage.getItem('ironveil-opts') || '{}'), { seed: opts.seed }); } catch { /* ignore */ }
+const opts = { side: 0, diff: 1, size: 1, date: 0, gfx: 2, seed: Math.floor(Math.random() * 99999) };
+try { Object.assign(opts, JSON.parse(localStorage.getItem('kyiv-opts') || '{}'), { seed: opts.seed }); } catch { /* ignore */ }
 
 function seg(id: string, labels: string[], key: keyof typeof opts) {
   const el = $(id); el.innerHTML = '';
@@ -23,20 +22,19 @@ function seg(id: string, labels: string[], key: keyof typeof opts) {
   });
 }
 seg('optDiff', DIFFICULTY_NAMES, 'diff');
-seg('optOpp', ['1', '2', '3'], 'opp');
+seg('optSide', ['Ukraine — Zelensky', 'Russia — Putin'], 'side');
 seg('optSize', ['Small', 'Medium', 'Large'], 'size');
-seg('optBiome', [...BIOMES.map(b => b.name), 'Random'], 'biome');
-seg('optWet', ['Lakes & rivers', 'Open seas (naval)'], 'wet');
+seg('optDate', START_DATES.map(d => d[0]), 'date');
 seg('optGfx', ['Low', 'Medium', 'High'], 'gfx');
 const seedEl = $('optSeed') as HTMLInputElement; seedEl.value = '' + opts.seed;
 $('seedRnd').onclick = () => { seedEl.value = '' + Math.floor(Math.random() * 99999); };
 
 const vol = { music: 0.42, sfx: 0.5 };
-try { Object.assign(vol, JSON.parse(localStorage.getItem('ironveil-vol') || '{}')); } catch { /* ignore */ }
+try { Object.assign(vol, JSON.parse(localStorage.getItem('kyiv-vol') || '{}')); } catch { /* ignore */ }
 function applyVol() { audio.setVolume(vol.sfx); audio.music?.setVolume(vol.music); }
 for (const k of ['music', 'sfx'] as const) {
   const el = $('vol' + k) as HTMLInputElement; el.value = '' + Math.round(vol[k] * 100);
-  el.oninput = () => { vol[k] = +el.value / 100; applyVol(); try { localStorage.setItem('ironveil-vol', JSON.stringify(vol)); } catch { /* ignore */ } };
+  el.oninput = () => { vol[k] = +el.value / 100; applyVol(); try { localStorage.setItem('kyiv-vol', JSON.stringify(vol)); } catch { /* ignore */ } };
 }
 interface Session { game: Game; r: Renderer; ui: UI; ais: AI[]; me: Team; raf: number; paused: boolean; speed: number; ended: boolean }
 let S: Session | null = null;
@@ -45,13 +43,13 @@ const SPEEDS = [0.5, 1, 1.5, 2, 3];
 function start() {
   audio.init(); applyVol(); audio.music?.stop(); audio.music?.start();
   const seed = (parseInt(seedEl.value, 10) || 1) >>> 0;
-  try { localStorage.setItem('ironveil-opts', JSON.stringify(opts)); } catch { /* ignore */ }
-  const biome = opts.biome === 4 ? seed % 4 : opts.biome;
-  const players = [{ ai: false, level: 0, ally: 0 }];
-  for (let i = 0; i <= opts.opp; i++) players.push({ ai: true, level: opts.diff, ally: i + 1 });
-  const game = new Game({ n: [112, 144, 176][opts.size], seed, biome, wet: opts.wet, players });
-  const me = game.teams[0];
-  if (!icons) icons = makeIcons();
+  try { localStorage.setItem('kyiv-opts', JSON.stringify(opts)); } catch { /* ignore */ }
+  const side = opts.side ? 1 : 0;
+  const players = [0, 1].map(i => ({ ai: i !== side, level: opts.diff, ally: i }));
+  const game = new Game({ n: [128, 152, 184][opts.size], seed, start: opts.date, players });
+  const me = game.teams[side];
+  const icons = iconSets[side] || (iconSets[side] = makeIcons(side));
+  $('leader').textContent = TEAM_NAMES[side] + ' · ' + LEADERS[side]; $('leader').className = side ? 'ru' : 'ua';
   const canvas = $('gl') as HTMLCanvasElement;
   const r = new Renderer(canvas, game, me, opts.gfx);
   const ses: Session = { game, r, ui: null as any, ais: game.teams.filter(t => t.ai).map(t => new AI(game, t)), me, raf: 0, paused: false, speed: 1, ended: false };
@@ -62,8 +60,9 @@ function start() {
   $('spdVal').textContent = '1×';
   S = ses;
   $('menu').classList.add('hidden'); $('hud').classList.remove('hidden'); $('end').classList.add('hidden'); $('pause').classList.add('hidden');
-  ses.ui.toast(`${BIOMES[biome].name} · ${DIFFICULTY_NAMES[opts.diff]} · seed ${seed}`);
-  (window as any).__S = ses;
+  ses.ui.toast(side ? 'Hostomel. Your columns are staged north-west of the Irpin. Take Kyiv.' : 'Kyiv. The invasion has begun. Hold the capital.');
+  ses.ui.toast(`${START_DATES[opts.date][0]} · ${DIFFICULTY_NAMES[opts.diff]} · seed ${seed}`);
+  (window as any).__S = ses; (window as any).__DEFS = DEFS;
   let last = performance.now(), acc = 0;
   const loop = (now: number) => {
     ses.raf = requestAnimationFrame(loop);
@@ -85,10 +84,10 @@ function showEnd(ses: Session) {
   if (S !== ses) return;
   audio.music?.finale(!ses.me.dead);
   const g = ses.game, won = !ses.me.dead;
-  $('endTitle').textContent = won ? 'VICTORY' : 'DEFEAT';
+  $('endTitle').textContent = won ? (ses.me.fac ? 'KYIV HAS FALLEN' : 'KYIV STANDS') : (ses.me.fac ? 'THE INVASION HAS FAILED' : 'KYIV HAS FALLEN');
   ($('endTitle') as HTMLElement).style.color = won ? '#6fe08a' : '#ff6a50';
-  let h = `<p>Battle time ${fmtTime(g.tick / TICK)}</p><table><tr><th>Commander</th><th>Built</th><th>Kills</th><th>Lost</th><th>Metal</th></tr>`;
-  for (const t of g.teams) h += `<tr><td style="color:#${TEAM_COLORS[t.id].toString(16).padStart(6, '0')}">${TEAM_NAMES[t.id]}${t.ai ? ' (' + DIFFICULTY_NAMES[t.level] + ')' : ' (you)'}</td><td>${t.stats.built}</td><td>${t.stats.kills}</td><td>${t.stats.lost}</td><td>${Math.round(t.stats.metal)}</td></tr>`;
+  let h = `<p>${g.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })} · ${fmtTime(g.tick / TICK)} played · ${g.bodies.length} dead on the field · ${g.map.civ.filter(c => c.state).length} buildings destroyed</p><table><tr><th>Side</th><th>Built</th><th>Kills</th><th>Lost</th><th>Supplies</th><th>Civilians killed</th></tr>`;
+  for (const t of g.teams) h += `<tr><td style="color:#${TEAM_COLORS[t.id].toString(16).padStart(6, '0')}">${TEAM_NAMES[t.id]}${t.ai ? ' (' + DIFFICULTY_NAMES[t.level] + ')' : ' (you)'}</td><td>${t.stats.built}</td><td>${t.stats.kills}</td><td>${t.stats.lost}</td><td>${Math.round(t.stats.metal)}</td><td>${t.condemn}</td></tr>`;
   $('endStats').innerHTML = h + '</table>';
   $('btnWatch').classList.toggle('hidden', g.over);
   $('end').classList.remove('hidden');

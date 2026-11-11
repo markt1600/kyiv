@@ -47,13 +47,13 @@ export function makeWater(map: GameMap, fogTex: THREE.Texture, sunDir: THREE.Vec
   const uni = {
     uTime: { value: 0 }, uDepth: { value: dTex }, uFog: { value: fogTex }, uNrm: { value: nTex }, uSize: { value: map.size },
     uShallow: { value: shallow }, uDeep: { value: deep }, uSky: { value: sky }, uSunDir: { value: sunDir.clone().normalize() },
-    uSunCol: { value: new THREE.Color(sunCol) }, uFogCol: { value: new THREE.Color(bio.fogCol) },
+    uSunCol: { value: new THREE.Color(sunCol) }, uFogCol: { value: new THREE.Color(bio.fogCol) }, uIce: { value: 0 },
   };
   const mat = new THREE.ShaderMaterial({
     uniforms: uni, transparent: true, depthWrite: false,
     vertexShader: `varying vec3 vW; void main(){ vec4 w=modelMatrix*vec4(position,1.0); vW=w.xyz; gl_Position=projectionMatrix*viewMatrix*w; }`,
     fragmentShader: `
-      uniform float uTime, uSize; uniform sampler2D uDepth, uFog, uNrm;
+      uniform float uTime, uSize, uIce; uniform sampler2D uDepth, uFog, uNrm;
       uniform vec3 uShallow, uDeep, uSky, uSunDir, uSunCol, uFogCol; varying vec3 vW;
       void main(){
         vec2 uv = vW.xz / uSize; vec2 p = vW.xz;
@@ -81,7 +81,11 @@ export function makeWater(map: GameMap, fogTex: THREE.Texture, sunDir: THREE.Vec
         float band = sin(depth*150.0 + uTime*1.5 + fn*5.0)*0.5 + 0.5;
         float foam = smoothstep(0.55, 0.95, shore*0.75 + band*shore*0.5 + (fn-0.5)*0.5*shore);
         col = mix(col, vec3(0.92,0.96,1.0), foam*0.8);
-        float alpha = max(mix(0.5, 0.97, smoothstep(0.0, 0.32, depth)), max(foam, fres));
+        // winter: pack ice drifting on the river, thickest along the banks
+        float icen = sin(p.x/31.0 + sin(p.y/23.0)*2.0 + uTime*0.02)*sin(p.y/27.0 + sin(p.x/19.0)*2.0)*0.25 + 0.5 + (texture2D(uNrm, p/90.0).g - 0.5)*0.5;
+        float ice = smoothstep(0.86 - uIce*0.5, 0.9 - uIce*0.5, icen + (1.0 - smoothstep(0.0, 0.5, depth))*0.2) * smoothstep(0.25, 0.5, uIce);
+        col = mix(col, vec3(0.78, 0.83, 0.88)*(0.8 + 0.3*icen), ice*0.92);
+        float alpha = max(max(mix(0.5, 0.97, smoothstep(0.0, 0.32, depth)), max(foam, fres)), ice);
         alpha *= smoothstep(0.0, 0.012, depth);
         float fg = texture2D(uFog, uv).g;
         col = mix(col, uFogCol, fg); alpha = mix(alpha, 1.0, fg*step(0.004, depth));
@@ -105,7 +109,8 @@ function colored(g: THREE.BufferGeometry, hex: number, jitter = 0.08, k = 1): TH
   const ng = g.index ? g.toNonIndexed() : g;
   if (g.index) { const m = ng.attributes.position.count, b = new Float32Array(m * 3); const idx = g.index.array; for (let i = 0; i < m; i++) { const s = idx[i]; b[i * 3] = a[s * 3]; b[i * 3 + 1] = a[s * 3 + 1]; b[i * 3 + 2] = a[s * 3 + 2]; } ng.setAttribute('color', new THREE.BufferAttribute(b, 3)); }
   else ng.setAttribute('color', new THREE.BufferAttribute(a, 3));
-  ng.deleteAttribute('uv');
+  const uv = new Float32Array(ng.attributes.position.count * 2); for (let i = 0; i < uv.length; i += 2) { uv[i] = SOLID[0]; uv[i + 1] = SOLID[1]; }
+  ng.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   return ng;
 }
 const T = (g: THREE.BufferGeometry, x: number, y: number, z: number, rx = 0, rz = 0) => { g.rotateX(rx); g.rotateZ(rz); g.translate(x, y, z); return g; };
@@ -139,27 +144,89 @@ function trunk(r: number, h: number, bend: number): THREE.BufferGeometry {
   g.computeVertexNormals();
   return g;
 }
-function pine(leaf: number, trunkCol: number, snow = 0): THREE.BufferGeometry {
-  const parts = [colored(trunk(0.5, 3.4, 0.08), trunkCol)];
-  const tiers = 5;
-  for (let i = 0; i < tiers; i++) {
-    const t = i / (tiers - 1), r = 2.7 - t * 1.9, h = 2.9 - t * 0.7, y = 2.9 + i * 1.45;
-    const c = snow && i >= 2 ? (i === tiers - 1 ? 0xf2f6fa : 0xc9d8e0) : leaf;
-    parts.push(colored(T(skirt(r, h, i + 1), 0, y, 0), c, 0.12, 0.8 + t * 0.35));
+/** uv of the opaque white patch in the foliage atlas (for trunks, rocks, anything that is not a leaf card) */
+const SOLID = [0.97, 0.03];
+let foliageTex: THREE.Texture | null = null;
+/** Foliage atlas. Left half: a spray of broad leaves. Right half: a pine bough of needles. Alpha varies per leaf so autumn can thin the crown. */
+function foliageAtlas() {
+  if (foliageTex) return foliageTex;
+  const S = 512, c = document.createElement('canvas'); c.width = c.height = S;
+  const x = c.getContext('2d')!, r = mulberry32(99);
+  // twigs first, then leaves over them
+  x.strokeStyle = 'rgba(120,100,80,0.95)'; x.lineWidth = 3;
+  for (let i = 0; i < 9; i++) { const a = r() * 6.283; x.beginPath(); x.moveTo(128, 256); x.quadraticCurveTo(128 + Math.cos(a) * 60, 256 + Math.sin(a) * 110, 128 + Math.cos(a) * 110, 256 + Math.sin(a) * 220); x.stroke(); }
+  for (let i = 0; i < 230; i++) {
+    const px = 18 + r() * 220, py = 18 + r() * 476, len = 13 + r() * 13, a = r() * 6.283, g = 150 + r() * 105;
+    if (Math.hypot((px - 128) / 128, (py - 256) / 256) > 0.97) continue;
+    x.save(); x.translate(px, py); x.rotate(a);
+    x.fillStyle = `rgba(${g * (0.72 + r() * 0.25)},${g},${g * (0.5 + r() * 0.3)},${0.5 + r() * 0.5})`;
+    x.beginPath(); x.moveTo(-len, 0); x.quadraticCurveTo(0, -len * 0.62, len, 0); x.quadraticCurveTo(0, len * 0.62, -len, 0); x.fill();
+    x.strokeStyle = 'rgba(60,80,40,0.5)'; x.lineWidth = 1; x.beginPath(); x.moveTo(-len, 0); x.lineTo(len, 0); x.stroke();
+    x.restore();
   }
+  // pine bough: a drooping twig feathered with needles
+  const bough = (x0: number, y0: number, x1: number, y1: number, w: number) => {
+    x.strokeStyle = 'rgba(110,90,70,1)'; x.lineWidth = 3; x.beginPath(); x.moveTo(x0, y0); x.lineTo(x1, y1); x.stroke();
+    const n = Math.hypot(x1 - x0, y1 - y0) / 2.2, dx = (x1 - x0) / n, dy = (y1 - y0) / n, l = Math.hypot(dx, dy);
+    for (let i = 0; i < n; i++) for (const sd of [-1, 1]) {
+      const g = 150 + r() * 105, nl = w * (0.5 + r() * 0.6) * (1 - i / n * 0.6), px = x0 + dx * i, py = y0 + dy * i;
+      x.strokeStyle = `rgba(${g * 0.7},${g},${g * 0.72},${0.75 + r() * 0.25})`; x.lineWidth = 1.6;
+      x.beginPath(); x.moveTo(px, py); x.lineTo(px + (-dy / l * sd + dx / l * 0.7) * nl, py + (dx / l * sd + dy / l * 0.7) * nl); x.stroke();
+    }
+  };
+  bough(376, 500, 376, 14, 30);
+  for (let i = 0; i < 9; i++) { const y = 470 - i * 48, sd = i % 2 ? 1 : -1, len = 96 - i * 7; bough(376, y, 376 + sd * len, y - 34 - r() * 20, 22); bough(376, y - 20, 376 - sd * len * 0.8, y - 60 - r() * 20, 20); }
+  x.clearRect(480, 480, 32, 32); x.fillStyle = '#fff'; x.fillRect(484, 484, 28, 28);
+  const t = foliageTex = new THREE.CanvasTexture(c); t.anisotropy = 4; t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+/** one textured leaf card. `n` is the shading normal (pointing out of the crown) so a tree lights as a volume rather than as flat cards */
+function card(w: number, h: number, pos: number[], rot: number[], pine: boolean, hex: number, k: number, n: number[]): THREE.BufferGeometry {
+  const g = new THREE.PlaneGeometry(w, h).toNonIndexed();
+  g.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(pos[0], pos[1], pos[2]), new THREE.Quaternion().setFromEuler(new THREE.Euler(rot[0], rot[1], rot[2], 'YXZ')), new THREE.Vector3(1, 1, 1)));
+  const cnt = g.attributes.position.count, col = new Float32Array(cnt * 3), nr = g.attributes.normal, uv = g.attributes.uv, c = new THREE.Color(hex);
+  const nl = Math.hypot(n[0], n[1], n[2]) || 1;
+  for (let i = 0; i < cnt; i++) {
+    col[i * 3] = c.r * k; col[i * 3 + 1] = c.g * k; col[i * 3 + 2] = c.b * k;
+    nr.setXYZ(i, n[0] / nl, n[1] / nl, n[2] / nl);
+    uv.setX(i, pine ? 0.5 + uv.getX(i) * 0.47 : uv.getX(i) * 0.5);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+function pine(leaf: number, trunkCol: number, _snow = 0): THREE.BufferGeometry {
+  const r = mulberry32(7), parts = [colored(trunk(0.42, 10.5, 0.1), trunkCol)];
+  const tiers = 7;
+  for (let i = 0; i < tiers; i++) {
+    const t = i / (tiers - 1), rad = 3.4 - t * 2.5, y = 3 + i * 1.25, nb = i < 4 ? 6 : 5;
+    for (let b = 0; b < nb; b++) {
+      const a = b / nb * 6.283 + i * 0.7 + r() * 0.4, droop = 0.35 + r() * 0.25 - t * 0.3, len = rad * (0.85 + r() * 0.3);
+      // the card lies along the branch: its long axis points outward and sags
+      parts.push(card(len * 0.95, len, [Math.sin(a) * len * 0.45, y - Math.sin(droop) * len * 0.3, Math.cos(a) * len * 0.45], [Math.PI / 2 - droop, a, 0], true, leaf, 0.6 + t * 0.5 + r() * 0.15, [Math.sin(a) * 0.6, 1, Math.cos(a) * 0.6]));
+    }
+  }
+  for (let b = 0; b < 3; b++) parts.push(card(1.9, 3.2, [0, 11.2, 0], [0, b * 1.047, 0], true, leaf, 1.15, [Math.sin(b * 1.047), 0.8, Math.cos(b * 1.047)]));
+  for (let b = 0; b < 3; b++) parts.push(card(4.2, 5, [0, 6.4, 0], [0, b * 1.047 + 0.5, 0], true, leaf, 0.62, [Math.sin(b * 1.047), 0.6, Math.cos(b * 1.047)])); // inner mass so the trunk is not bare
   return mergeGeometries(parts);
 }
 function broadleaf(leaf: number, leaf2: number, trunkCol: number): THREE.BufferGeometry {
-  return mergeGeometries([
-    colored(trunk(0.6, 4.2, 0.25), trunkCol),
-    colored(T(new THREE.CylinderGeometry(0.12, 0.2, 2.2, 5), 0.9, 3.4, 0.2, 0, -0.9), trunkCol),
-    colored(T(blob(2.5, 1), 0, 5.2, 0), leaf, 0.14),
-    colored(T(blob(1.8, 2), 1.5, 4.1, 0.6), leaf2, 0.14),
-    colored(T(blob(1.7, 3), -1.3, 4.4, -0.8), leaf2, 0.14, 0.9),
-    colored(T(blob(1.4, 4), 0.2, 6.6, -0.3), leaf, 0.14, 1.1),
-    colored(T(blob(1.5, 5), 0.6, 4.6, -1.5), leaf2, 0.14, 0.82),
-    colored(T(blob(1.3, 6), -0.9, 5.9, 1.0), leaf, 0.14, 1.05),
-  ]);
+  const r = mulberry32(11), parts = [
+    colored(trunk(0.55, 5.4, 0.25), trunkCol),
+    colored(T(new THREE.CylinderGeometry(0.1, 0.2, 3, 5), 1.0, 4.6, 0.2, 0, -0.9), trunkCol),
+    colored(T(new THREE.CylinderGeometry(0.1, 0.2, 2.8, 5), -0.9, 4.8, -0.3, 0.3, 0.8), trunkCol),
+    colored(T(new THREE.CylinderGeometry(0.08, 0.16, 2.6, 5), 0.1, 6.4, 0.5, -0.5, 0.15), trunkCol),
+  ];
+  // clumps of the crown: [x, y, z, radius]
+  const clumps = [[0, 6.6, 0, 2.7], [1.9, 5.2, 0.7, 1.9], [-1.7, 5.5, -0.9, 1.9], [0.3, 8.3, -0.3, 1.7], [0.7, 5.7, -1.9, 1.6], [-1.1, 7.3, 1.2, 1.6], [-0.4, 5, 1.7, 1.4]];
+  for (const [cx, cy, cz, cr] of clumps) {
+    const n = Math.round(5 + cr * 3);
+    for (let i = 0; i < n; i++) {
+      const u = r() * 2 - 1, a = r() * 6.283, s = Math.sqrt(1 - u * u), dx = s * Math.cos(a), dy = u * 0.8 + 0.15, dz = s * Math.sin(a), d = cr * (0.45 + r() * 0.5);
+      const px = cx + dx * d, py = cy + dy * d, pz = cz + dz * d, sz = cr * (0.95 + r() * 0.5);
+      parts.push(card(sz, sz * 2, [px, py, pz], [(r() - 0.5) * 1.6, r() * 6.283, (r() - 0.5) * 1.2], false, r() < 0.5 ? leaf : leaf2, 0.62 + 0.5 * Math.min(1, Math.max(0, (py - 3.6) / 5)) + r() * 0.12, [px - cx * 0.4, (py - 5.6) * 1.2 + 0.8, pz - cz * 0.4]));
+    }
+  }
+  return mergeGeometries(parts);
 }
 function cactus(col: number): THREE.BufferGeometry {
   return mergeGeometries([
@@ -219,12 +286,15 @@ export class Scenery {
   private px: Float32Array; private py: Float32Array; private pz: Float32Array; private sc: Float32Array; private rot: Float32Array;
   private count = 0; private byCell = new Map<number, number[]>();
   private t = 0; private map: GameMap;
-  uTime = { value: 0 };
+  uTime = { value: 0 }; private uSnow = { value: 0 }; private uBare = { value: 0 };
+  /** per-kind seasonal tint (multiplies the foliage colour) */
+  private tints = [new THREE.Color(1, 1, 1), new THREE.Color(1, 1, 1), new THREE.Color(1, 1, 1), new THREE.Color(1, 1, 1)];
 
   constructor(scene: THREE.Scene, map: GameMap, quality: number, seed: number) {
     this.map = map;
     const bi = BIOMES.indexOf(map.biome), n = map.n, rng = mulberry32(seed * 13 + 5);
-    const veg = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0, envMapIntensity: 0.3 });
+    const atlas = foliageAtlas();
+    const veg = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0, envMapIntensity: 0.3, map: atlas, alphaTest: 0.42, side: THREE.DoubleSide });
     // organic mottling: a 3-axis noise lookup in object space breaks up the flat leaf / bark / stone colours
     const organic = noiseTexture(128, (x, y) => { const v = 255 * (tile(x, y, 128, 7, 71) * 0.55 + tile(x, y, 128, 19, 73) * 0.3 + tile(x, y, 128, 47, 75) * 0.15); return [v, v, v, 255]; });
     const mottle = (sh: any) => {
@@ -236,18 +306,21 @@ export class Scenery {
     };
     veg.onBeforeCompile = sh => {
       mottle(sh);
-      sh.uniforms.uTime = this.uTime;
+      sh.uniforms.uTime = this.uTime; sh.uniforms.uSnow = this.uSnow; sh.uniforms.uBare = this.uBare;
+      // deciduous leaves (left half of the atlas) thin out through autumn and are gone by winter
+      sh.fragmentShader = 'uniform float uSnow, uBare;\n' + sh.fragmentShader.replace('#include <map_fragment>', '#include <map_fragment>\n if (vMapUv.x < 0.5) diffuseColor.a -= uBare;').replace('diffuseColor.rgb *= 0.45 + 1.15*og;', 'diffuseColor.rgb *= 0.45 + 1.15*og;\n diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.8, 0.83, 0.88) * clamp(max(vColor.r, max(vColor.g, vColor.b)) * 2.0, 0.0, 1.0), uSnow * smoothstep(0.42, 0.8, og + vOp.y*0.035) * 0.62);');
       sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
         #ifdef USE_INSTANCING
         float swy = max(0.0, transformed.y); float sph = instanceMatrix[3].x*0.13 + instanceMatrix[3].z*0.11;
         transformed.x += sin(uTime*1.7 + sph)*swy*0.024; transformed.z += cos(uTime*1.3 + sph*1.3)*swy*0.016;
         #endif`);
     };
+    const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: atlas, alphaTest: 0.42 });
     const stone = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.85, metalness: 0.05 });
     stone.onBeforeCompile = mottle;
     // per-biome kit: [tree A, tree B, rock, grass]
     let gA: THREE.BufferGeometry, gB: THREE.BufferGeometry, gR: THREE.BufferGeometry, gG: THREE.BufferGeometry | null;
-    if (bi === 0) { gA = pine(0x2f6a36, 0x5a4028); gB = broadleaf(0x4d8c35, 0x3b7a30, 0x5f472c); gR = rock(0x7d7a72); gG = tuft(0x6aa043, 0x8fb44e); }
+    if (bi === 0) { gA = pine(0x3d7a46, 0x4a3524); gB = broadleaf(0x5e9c3e, 0x477f34, 0x4c3a26); gR = rock(0x7d7a72); gG = tuft(0x6aa043, 0x8fb44e); }
     else if (bi === 1) { gA = cactus(0x5d8a4a); gB = bush(0x9a9455, 0x7f8048); gR = rock(0xb07d55); gG = tuft(0xb9a25e, 0xa08a4c); }
     else if (bi === 2) { gA = pine(0x2d5a45, 0x4a3a2c, 1); gB = bush(0xdfe9ef, 0xb8cbd6); gR = rock(0x8b98a4); gG = null; }
     else { gA = deadTree(0x1c1716); gB = shard(0x1a1518, 0xff5a18); gR = rock(0x2c2628); gG = null; }
@@ -272,6 +345,7 @@ export class Scenery {
     const mk = (g: THREE.BufferGeometry | null, mat: THREE.Material, cnt: number, burns: boolean, tall: boolean, shadow: boolean) => {
       const im = new THREE.InstancedMesh(g || new THREE.BufferGeometry(), mat, Math.max(1, cnt));
       im.count = cnt; im.frustumCulled = false; im.castShadow = shadow && quality >= 2; im.receiveShadow = true;
+      if (mat === veg) im.customDepthMaterial = depth;
       if (g && cnt) scene.add(im);
       this.kinds.push({ im, n: 0, burns, tall });
     };
@@ -295,6 +369,16 @@ export class Scenery {
     const m = _m, s = this.sc[i];
     _q.setFromAxisAngle(_y, this.rot[i]); _p.set(this.px[i], this.py[i], this.pz[i]); _s.set(s * sxz, s * sy, s * sxz);
     m.compose(_p, _q, _s); this.kinds[this.kind[i]].im.setMatrixAt(this.idx[i], m);
+  }
+  /** foliage follows the calendar: fresh green, bleached summer, autumn gold, bare and snow-laden in winter */
+  season(snow: number, mud: number, dry: number, doy: number) {
+    this.uSnow.value = snow;
+    const aut = clamp((doy - 255) / 30, 0, 1) * (1 - clamp((doy - 320) / 20, 0, 1)), bare = Math.max(snow, doy > 320 || doy < 95 ? 1 : 0) * (1 - clamp((doy - 95) / 25, 0, 1) * (doy < 200 ? 1 : 0));
+    this.uBare.value = bare * 0.62 + aut * 0.18;
+    this.tints[0].setRGB(1, 1, 1).lerp(_c.setRGB(0.85, 0.95, 0.9), snow * 0.5);
+    this.tints[1].setRGB(1, 1, 1).lerp(_c.setRGB(2.1, 1.1, 0.3), aut);
+    this.tints[2].setRGB(1, 1, 1);
+    this.tints[3].setRGB(1, 1, 1).lerp(_c.setRGB(1.5, 1.25, 0.6), Math.max(dry * 0.7, aut)).lerp(_c.setRGB(0.6, 0.5, 0.36), mud * 0.6);
   }
   /** does this cell hold tall vegetation (for bigger flames)? */
   tallAt(c: number): boolean {
@@ -325,7 +409,7 @@ export class Scenery {
     const col = _c;
     for (let i = 0; i < this.count; i++) {
       const v = vis[this.cell[i]], f = (v & 2 ? 1 : v & 1 ? 0.4 : 0) * (this.state[i] === 1 ? 0.07 : this.tint[i]);
-      this.kinds[this.kind[i]].im.setColorAt(this.idx[i], col.setScalar(f));
+      this.kinds[this.kind[i]].im.setColorAt(this.idx[i], col.copy(this.tints[this.kind[i]]).multiplyScalar(f));
     }
     for (const k of this.kinds) if (k.im.instanceColor) k.im.instanceColor.needsUpdate = true;
   }
