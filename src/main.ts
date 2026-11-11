@@ -49,7 +49,7 @@ const SPEEDS = [0.5, 1, 1.5, 2, 3];
 // ───────────── title screen: a live AI-vs-AI battle behind the menu, with a roaming camera ─────────────
 interface Attract { game: Game; r: Renderer | null; ais: AI[]; raf: number; hot: { x: number; z: number; t: number }[]; tx: number; tz: number; cut: number; quiet: number }
 let A: Attract | null = null;
-const STILLS = ['district', 'bridge', 'night', 'air', 'winter', 'district2', 'flir'];
+const STILLS = ['winter', 'district', 'bridge', 'night', 'air', 'flir'];
 let stillT = 0;
 function slideshow() {
   const layers = Array.from(document.querySelectorAll('#stills .still')) as HTMLElement[], ok: string[] = [];
@@ -72,7 +72,8 @@ function startAttract() {
   const me = game.teams[0], uv = (game as any).updateVision.bind(game);
   (game as any).updateVision = () => { uv(); me.vis.fill(7); };
   // let the war get under way before the cameras roll, in slices so the menu stays responsive
-  let left = 6600;
+  let left = 10800; // …and so that it is mid-morning when they do
+  const t0 = performance.now();
   const ff = () => {
     if (A !== a) return;
     for (let i = 0; i < 300 && left > 0 && !game.over; i++, left--) { for (const ai of a.ais) ai.update(); game.step(); }
@@ -109,7 +110,7 @@ function startAttract() {
       }
       const c = r.cam; c.x += (a.tx - c.x) * Math.min(1, dt * 0.5); c.z += (a.tz - c.z) * Math.min(1, dt * 0.5); c.yaw += dt * 0.035; c.dist = Math.max(70, c.dist - dt * 1.6);
       r.frame(acc / DT, dt, none, false);
-      if (!shown) { shown = true; $('menu').classList.add('live'); setTimeout(() => { if (A === a) { backdrop.stop(); clearInterval(stillT); } }, 2200); }
+      if (!shown && now - t0 > 6500) { shown = true; $('menu').classList.add('live'); setTimeout(() => { if (A === a) { backdrop.stop(); clearInterval(stillT); } }, 2200); }
       if (game.over) { stopAttract(); backdrop.start(); setTimeout(startAttract, 1500); }
     };
     a.raf = requestAnimationFrame(loop);

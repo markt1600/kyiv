@@ -270,6 +270,7 @@ export class Renderer {
   /** planar reflection of the world in the rivers (High quality) */
   private refRT: THREE.WebGLRenderTarget | null = null; private refCam = new THREE.PerspectiveCamera(); private noReflect: THREE.Object3D[] = []; private refM = new THREE.Matrix4();
   /** thermal drone-feed view */
+  private skirt!: THREE.Mesh; private skirtCol = new THREE.Color();
   flir = false; private waterDepth: { depth: Uint8Array; dTex: THREE.DataTexture } | null = null; private terrainMatAttr!: THREE.BufferAttribute; private trackDirty = false; private trackT = 0; private pose = new WeakMap<Unit, number>();
   world!: World; private hemi!: THREE.HemisphereLight; night = 0; private rockets: { m: THREE.Mesh; vy: number; t: number; y0: number }[] = [];
   private uSeason = { snow: { value: 0 }, mud: { value: 0 }, dry: { value: 0 } }; private skyDay = new THREE.Color(); private bloomPass: UnrealBloomPass | null = null;
@@ -473,7 +474,8 @@ export class Renderer {
     const terrain = new THREE.Mesh(tg, tmat);
     terrain.receiveShadow = true; this.scene.add(terrain);
     // skirt
-    const skirt = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000), new THREE.MeshBasicMaterial({ color: new THREE.Color(bio.mid).multiplyScalar(0.32) }));
+    this.skirtCol.set(bio.mid).multiplyScalar(0.32);
+    const skirt = this.skirt = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000), new THREE.MeshBasicMaterial({ color: new THREE.Color(bio.mid).multiplyScalar(0.32) }));
     skirt.rotation.x = -Math.PI / 2; skirt.position.set(map.size / 2, Math.min(-2, map.waterY - 3), map.size / 2); this.scene.add(skirt);
 
     // ── fog of war ──
@@ -615,17 +617,17 @@ export class Renderer {
     const dayT = (g.tick / TICK / DAY_SECS + 0.27) % 1, ang = (dayT - 0.25) * 6.283, el = Math.min(1, Math.sin(ang) * 0.8 + 0.42);
     const night = this.night = smooth(0.1, -0.16, el), dayK = clamp(el * 2.6, 0, 1), overcast = Math.max(g.snow * 0.55, g.mud * 0.7);
     if (el > -0.06) { const az = ang * 0.5 + 0.5; this.sunDir.set(Math.cos(az) * 0.8, Math.max(0.14, el * 0.9), Math.sin(az) * 0.8).normalize(); _c.setHex(0xff9450).lerp(_c2.setHex(bio.sun), dayK); this.sun.intensity = (0.5 + 2.0 * dayK) * (1 - 0.4 * overcast); }
-    else { this.sunDir.set(-0.35, 0.82, 0.3).normalize(); _c.setHex(0x9db4e0); this.sun.intensity = 1.0; }
+    else { this.sunDir.set(-0.35, 0.82, 0.3).normalize(); _c.setHex(0xa9bfe8); this.sun.intensity = 1.5; }
     this.sun.color.copy(_c);
     const sky = _c.copy(this.skyDay).lerp(_c2.setHex(0x8e959b), overcast).lerp(_c2.setHex(0xe09060), (1 - dayK) * (1 - night) * 0.45);
-    this.hemi.color.copy(sky).lerp(_c2.setHex(0x5a6c94), night); this.hemi.intensity = lerp(0.85, 0.9, night) * (1 - 0.1 * overcast);
+    this.hemi.color.copy(sky).lerp(_c2.setHex(0x6c80ac), night); this.hemi.intensity = lerp(0.85, 1.7, night) * (1 - 0.1 * overcast);
     if (this.waterUni) { this.waterUni.uSunDir.value.copy(this.sunDir); this.waterUni.uSky.value.copy(sky).lerp(_c2.setHex(0x0a0e18), night * 0.9); this.waterUni.uSunCol.value.copy(this.sun.color).multiplyScalar(night > 0.5 ? 0.25 : 1); this.waterUni.uIce.value = g.snow; }
     // the sky dome follows the real sun (which may be below the horizon); haze thickens under overcast
     const su = (this.sky.material as THREE.ShaderMaterial).uniforms, az0 = ang * 0.5 + 0.5;
     su.sunPosition.value.set(Math.cos(az0) * 0.8, el * 0.9, Math.sin(az0) * 0.8).normalize();
     su.turbidity.value = lerp(2.6, 16, overcast); su.rayleigh.value = lerp(1.5, 0.5, overcast) + (1 - dayK) * 1.2 * (1 - night);
     su.mieCoefficient.value = 0.004 + 0.03 * overcast; su.mieDirectionalG.value = 0.84;
-    this.skyK.value = lerp(0.26, 0.2, overcast); this.skyNight.value.setHex(0x06090f).multiplyScalar(night);
+    this.skyK.value = lerp(0.26, 0.2, overcast) * (1 - night * 0.92); this.skyNight.value.setHex(0x06090f).multiplyScalar(night);
     this.sky.position.copy(this.camera.position);
     this.envT -= dt;
     if (this.envT <= 0 || Math.abs(el - this.envEl) > 0.05) { // re-filter the sky into the lighting environment as the hour changes
@@ -636,6 +638,7 @@ export class Renderer {
     sky.multiplyScalar(lerp(0.62, 0.5, overcast)).lerp(_c2.setHex(0x0a0e16), night);
     (this.scene.background as THREE.Color).copy(sky); (this.scene.fog as THREE.Fog).color.copy(sky);
     this.scene.environmentIntensity = lerp(1.35, 0.6, night);
+    (this.skirt.material as THREE.MeshBasicMaterial).color.copy(this.skirtCol).multiplyScalar(lerp(1, 0.06, night) * (0.35 + 0.65 * dayK + 0.65 * night));
     if (this.bloomPass) this.bloomPass.strength = lerp(0.18, 0.28, night);
     this.uSeason.snow.value = g.snow; this.uSeason.mud.value = g.mud; this.uSeason.dry.value = g.dry;
     if (this.grade) this.grade.uniforms.uFlir.value = this.flir ? 1 : 0;
