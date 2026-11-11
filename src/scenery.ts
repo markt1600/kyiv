@@ -48,12 +48,13 @@ export function makeWater(map: GameMap, fogTex: THREE.Texture, sunDir: THREE.Vec
     uTime: { value: 0 }, uDepth: { value: dTex }, uFog: { value: fogTex }, uNrm: { value: nTex }, uSize: { value: map.size },
     uShallow: { value: shallow }, uDeep: { value: deep }, uSky: { value: sky }, uSunDir: { value: sunDir.clone().normalize() },
     uSunCol: { value: new THREE.Color(sunCol) }, uFogCol: { value: new THREE.Color(bio.fogCol) }, uIce: { value: 0 },
+    uRef: { value: null as THREE.Texture | null }, uRefM: { value: new THREE.Matrix4() }, uRefOn: { value: 0 },
   };
   const mat = new THREE.ShaderMaterial({
     uniforms: uni, transparent: true, depthWrite: false,
     vertexShader: `varying vec3 vW; void main(){ vec4 w=modelMatrix*vec4(position,1.0); vW=w.xyz; gl_Position=projectionMatrix*viewMatrix*w; }`,
     fragmentShader: `
-      uniform float uTime, uSize, uIce; uniform sampler2D uDepth, uFog, uNrm;
+      uniform float uTime, uSize, uIce, uRefOn; uniform sampler2D uDepth, uFog, uNrm, uRef; uniform mat4 uRefM;
       uniform vec3 uShallow, uDeep, uSky, uSunDir, uSunCol, uFogCol; varying vec3 vW;
       void main(){
         vec2 uv = vW.xz / uSize; vec2 p = vW.xz;
@@ -71,10 +72,11 @@ export function makeWater(map: GameMap, fogTex: THREE.Texture, sunDir: THREE.Vec
         body += caust * uSunCol * 0.22;
         vec3 R = reflect(-V, N);
         vec3 sky = mix(uSky*1.15, uSky*0.5, clamp(R.y*1.3, 0.0, 1.0));
+        if (uRefOn > 0.5) { vec4 rc = uRefM * vec4(vW, 1.0); vec3 rf = texture2D(uRef, clamp(rc.xy/rc.w + N.xz*0.04, 0.002, 0.998)).rgb; sky = mix(sky, rf, 0.92); }
         float sd = max(dot(R, uSunDir), 0.0);
         float spec = pow(sd, 180.0)*6.0 + pow(sd, 24.0)*0.22;
         body *= 0.82 + 0.36*(nn.x+nn.y+0.5);
-        vec3 col = mix(body, sky, fres*0.85) + uSunCol*spec;
+        vec3 col = mix(body, sky, clamp(fres*0.85 + uRefOn*0.12, 0.0, 1.0)) + uSunCol*spec;
         // shoreline foam: animated bands that roll toward the beach
         float shore = 1.0 - smoothstep(0.0, 0.1, depth);
         float fn = texture2D(uNrm, p/13.0 + vec2(uTime*0.02, -uTime*0.013)).r;
@@ -286,6 +288,8 @@ export class Scenery {
   private px: Float32Array; private py: Float32Array; private pz: Float32Array; private sc: Float32Array; private rot: Float32Array;
   private count = 0; private byCell = new Map<number, number[]>();
   private t = 0; private map: GameMap;
+  /** foliage meshes (left out of ambient occlusion: they are alpha-cut cards) */
+  foliage: THREE.Object3D[] = [];
   uTime = { value: 0 }; private uSnow = { value: 0 }; private uBare = { value: 0 };
   /** per-kind seasonal tint (multiplies the foliage colour) */
   private tints = [new THREE.Color(1, 1, 1), new THREE.Color(1, 1, 1), new THREE.Color(1, 1, 1), new THREE.Color(1, 1, 1)];
@@ -320,7 +324,7 @@ export class Scenery {
     stone.onBeforeCompile = mottle;
     // per-biome kit: [tree A, tree B, rock, grass]
     let gA: THREE.BufferGeometry, gB: THREE.BufferGeometry, gR: THREE.BufferGeometry, gG: THREE.BufferGeometry | null;
-    if (bi === 0) { gA = pine(0x3d7a46, 0x4a3524); gB = broadleaf(0x5e9c3e, 0x477f34, 0x4c3a26); gR = rock(0x7d7a72); gG = tuft(0x6aa043, 0x8fb44e); }
+    if (bi === 0) { gA = pine(0x3d7a46, 0x4a3524); gB = broadleaf(0x5e9c3e, 0x477f34, 0x4c3a26); gR = rock(0x7d7a72); gG = tuft(0x55782f, 0x6a8a3a); gG.scale(0.55, 0.5, 0.55); }
     else if (bi === 1) { gA = cactus(0x5d8a4a); gB = bush(0x9a9455, 0x7f8048); gR = rock(0xb07d55); gG = tuft(0xb9a25e, 0xa08a4c); }
     else if (bi === 2) { gA = pine(0x2d5a45, 0x4a3a2c, 1); gB = bush(0xdfe9ef, 0xb8cbd6); gR = rock(0x8b98a4); gG = null; }
     else { gA = deadTree(0x1c1716); gB = shard(0x1a1518, 0xff5a18); gR = rock(0x2c2628); gG = null; }
@@ -345,7 +349,7 @@ export class Scenery {
     const mk = (g: THREE.BufferGeometry | null, mat: THREE.Material, cnt: number, burns: boolean, tall: boolean, shadow: boolean) => {
       const im = new THREE.InstancedMesh(g || new THREE.BufferGeometry(), mat, Math.max(1, cnt));
       im.count = cnt; im.frustumCulled = false; im.castShadow = shadow && quality >= 2; im.receiveShadow = true;
-      if (mat === veg) im.customDepthMaterial = depth;
+      if (mat === veg) { im.customDepthMaterial = depth; this.foliage.push(im); }
       if (g && cnt) scene.add(im);
       this.kinds.push({ im, n: 0, burns, tall });
     };

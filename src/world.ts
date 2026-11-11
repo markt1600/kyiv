@@ -5,7 +5,7 @@ import { Bridge, CELL, Civ, GameMap } from './map';
 import { Game, Team, TICK } from './sim';
 import { YEAR_SECS } from './defs';
 import { hash2, lerp, mulberry32 } from './util';
-import { tile } from './scenery';
+import { normalTexture, tile } from './scenery';
 
 const BAY = 3.2, FLOOR = 3.0, TILES = 4;
 
@@ -15,6 +15,10 @@ function facadeTextures(broken = false) {
   const c = document.createElement('canvas'); c.width = c.height = S;
   const e = document.createElement('canvas'); e.width = e.height = S;
   const x = c.getContext('2d')!, ex = e.getContext('2d')!;
+  // height (for the normal map) and roughness: glass is recessed and mirror-smooth, concrete is proud and matte
+  const hc = document.createElement('canvas'); hc.width = hc.height = S; const rc = document.createElement('canvas'); rc.width = rc.height = S;
+  const hx = hc.getContext('2d')!, rx = rc.getContext('2d')!;
+  hx.fillStyle = '#c8c8c8'; hx.fillRect(0, 0, S, S); rx.fillStyle = 'rgb(0,232,0)'; rx.fillRect(0, 0, S, S);
   const rnd = mulberry32(4242);
   x.fillStyle = '#d9d6cf'; x.fillRect(0, 0, S, S);
   ex.fillStyle = '#000'; ex.fillRect(0, 0, S, S);
@@ -23,10 +27,13 @@ function facadeTextures(broken = false) {
     const v = 205 + rnd() * 30; x.fillStyle = `rgb(${v},${v - 3},${v - 9})`; x.fillRect(px, py, B, B);
     // panel seams
     x.strokeStyle = 'rgba(40,38,34,0.55)'; x.lineWidth = 2; x.strokeRect(px + 1, py + 1, B - 2, B - 2);
+    hx.strokeStyle = '#505050'; hx.lineWidth = 3; hx.strokeRect(px + 1, py + 1, B - 2, B - 2);
     // window
     const wx = px + 34, wy = py + 30, ww = 60, wh = 62;
     x.fillStyle = '#e6e3da'; x.fillRect(wx - 4, wy - 4, ww + 8, wh + 8);
     const dark = rnd() < (broken ? 0.75 : 0.2);
+    hx.fillStyle = '#e6e6e6'; hx.fillRect(wx - 5, wy - 5, ww + 10, wh + 10); hx.fillStyle = '#5a5a5a'; hx.fillRect(wx, wy, ww, wh); hx.fillStyle = '#d0d0d0'; hx.fillRect(wx + ww / 2 - 2, wy, 4, wh); hx.fillRect(wx, wy + wh * 0.35 - 2, ww, 4);
+    rx.fillStyle = broken ? 'rgb(0,200,0)' : `rgb(0,${18 + rnd() * 40},0)`; rx.fillRect(wx, wy, ww, wh);
     x.fillStyle = dark ? '#0d0f12' : `rgb(${38 + rnd() * 30},${48 + rnd() * 30},${58 + rnd() * 34})`; x.fillRect(wx, wy, ww, wh);
     if (!dark && rnd() < 0.5) { x.fillStyle = `rgba(${190 + rnd() * 50},${180 + rnd() * 50},${150 + rnd() * 60},0.55)`; x.fillRect(wx, wy, ww * (0.3 + rnd() * 0.3), wh); } // curtain
     if (rnd() < 0.12) { x.fillStyle = '#8a7a58'; x.fillRect(wx, wy, ww, wh); x.strokeStyle = '#5c4f38'; x.beginPath(); x.moveTo(wx, wy); x.lineTo(wx + ww, wy + wh); x.moveTo(wx + ww, wy); x.lineTo(wx, wy + wh); x.stroke(); } // boarded up
@@ -39,7 +46,7 @@ function facadeTextures(broken = false) {
       const sg = x.createLinearGradient(0, wy, 0, wy - 34); sg.addColorStop(0, 'rgba(8,7,6,0.75)'); sg.addColorStop(1, 'rgba(8,7,6,0)'); x.fillStyle = sg; x.fillRect(wx - 6, wy - 34, ww + 12, 34);
     }
     // balcony on some bays
-    if (rnd() < 0.4) { x.fillStyle = `rgb(${120 + rnd() * 70},${120 + rnd() * 60},${110 + rnd() * 50})`; x.fillRect(wx - 12, wy + wh - 6, ww + 24, 30); x.strokeStyle = 'rgba(0,0,0,0.5)'; x.lineWidth = 1.5; x.strokeRect(wx - 12, wy + wh - 6, ww + 24, 30); }
+    if (rnd() < 0.4) { x.fillStyle = `rgb(${120 + rnd() * 70},${120 + rnd() * 60},${110 + rnd() * 50})`; x.fillRect(wx - 12, wy + wh - 6, ww + 24, 30); hx.fillStyle = '#ffffff'; hx.fillRect(wx - 12, wy + wh - 6, ww + 24, 30); rx.fillStyle = 'rgb(0,215,0)'; rx.fillRect(wx - 12, wy + wh - 6, ww + 24, 30); x.strokeStyle = 'rgba(0,0,0,0.5)'; x.lineWidth = 1.5; x.strokeRect(wx - 12, wy + wh - 6, ww + 24, 30); }
     // water stains running down from the sill
     for (let k = 0; k < 4; k++) { const sx = wx + rnd() * ww, g = x.createLinearGradient(0, wy + wh, 0, wy + wh + 40); g.addColorStop(0, 'rgba(30,26,20,0.4)'); g.addColorStop(1, 'rgba(30,26,20,0)'); x.fillStyle = g; x.fillRect(sx, wy + wh + (rnd() < 0.5 ? 24 : 2), 2 + rnd() * 5, 40); }
     // a few lit windows: this is a city under blackout
@@ -52,7 +59,9 @@ function facadeTextures(broken = false) {
   }
   x.putImageData(img, 0, 0);
   const mk = (cv: HTMLCanvasElement) => { const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; t.colorSpace = THREE.SRGBColorSpace; return t; };
-  return { map: mk(c), lit: mk(e) };
+  const hd = hx.getImageData(0, 0, S, S).data, normal = normalTexture(S, (px, py) => hd[(py * S + px) * 4] / 255, 3.2);
+  const rough = mk(rc); rough.colorSpace = THREE.NoColorSpace;
+  return { map: mk(c), lit: mk(e), normal, rough };
 }
 
 const WALLUV = 0.035;
@@ -289,10 +298,10 @@ export class World {
       };
       return m;
     };
-    this.mat = snowy(new THREE.MeshStandardMaterial({ vertexColors: true, map: tex.map, emissiveMap: tex.lit, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.9, metalness: 0.04, envMapIntensity: 0.35 }));
+    this.mat = snowy(new THREE.MeshStandardMaterial({ vertexColors: true, map: tex.map, emissiveMap: tex.lit, emissive: 0xffffff, emissiveIntensity: 0, normalMap: tex.normal, normalScale: new THREE.Vector2(1.2, 1.2), roughnessMap: tex.rough, roughness: 1, metalness: 0, envMapIntensity: 1.1 }));
     const btex = facadeTextures(true);
-    this.hitMat = snowy(new THREE.MeshStandardMaterial({ vertexColors: true, map: btex.map, roughness: 0.95, metalness: 0.02, envMapIntensity: 0.2 }));
-    this.ruinMat = snowy(new THREE.MeshStandardMaterial({ vertexColors: true, map: btex.map, roughness: 1, metalness: 0, envMapIntensity: 0.1 }));
+    this.hitMat = snowy(new THREE.MeshStandardMaterial({ vertexColors: true, map: btex.map, normalMap: btex.normal, normalScale: new THREE.Vector2(1.3, 1.3), roughnessMap: btex.rough, roughness: 1, metalness: 0, envMapIntensity: 0.6 }));
+    this.ruinMat = snowy(new THREE.MeshStandardMaterial({ vertexColors: true, map: btex.map, normalMap: btex.normal, roughness: 1, metalness: 0, envMapIntensity: 0.15 }));
     for (const c of map.civ) {
       const m = new THREE.Mesh(c.state ? buildRuin(c) : buildCiv(c), c.dmg >= 2 ? this.ruinMat : c.dmg === 1 ? this.hitMat : this.mat);
       m.position.set(c.x, map.groundY(c.x, c.z) - 0.3, c.z); m.castShadow = quality >= 1; m.receiveShadow = true; m.visible = false; m.matrixAutoUpdate = false; m.updateMatrix();
@@ -343,7 +352,7 @@ export class World {
       const age = (game.tick - b.born) / dayTicks;
       let sy = 1, sxz = 1; const col = _c;
       if (b.fac < 2) col.copy(UNIFORM[b.fac]); else col.copy(COATS[b.id % COATS.length]);
-      if (age > 45) { sy = 0.3; sxz = 0.8; col.setRGB(0.5, 0.47, 0.38); }
+      if (age > 45) { sy = 0.3; sxz = 0.8; col.setRGB(0.34, 0.31, 0.25); }
       else if (age > 14) { const k = (age - 14) / 31; sy = lerp(0.8, 0.4, k); col.lerp(_c2.setRGB(0.1, 0.085, 0.06), 0.75 + 0.15 * k); }
       else if (age > 3) { const k = (age - 3) / 11; sy = 1 + 0.3 * Math.sin(k * Math.PI); col.lerp(_c2.setRGB(0.2, 0.22, 0.14), k * 0.7); }
       if (snow > 0.05) col.lerp(_c2.setRGB(0.85, 0.87, 0.9), snow * Math.min(0.75, age / 6));

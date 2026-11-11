@@ -5,9 +5,12 @@ import { UI } from './ui';
 import { Audio } from './audio';
 import { DEFS, LEADERS, START_DATES, TEAM_COLORS, TEAM_NAMES } from './defs';
 import { fmtTime } from './util';
+import { MenuBackdrop } from './menu';
 
 const $ = (id: string) => document.getElementById(id)!;
 const audio = new Audio();
+const backdrop = new MenuBackdrop($('menuBg') as HTMLCanvasElement);
+backdrop.start();
 const iconSets: (Record<string, string> | null)[] = [null, null];
 
 const opts = { side: 0, diff: 1, size: 1, date: 0, gfx: 2, seed: Math.floor(Math.random() * 99999) };
@@ -22,7 +25,10 @@ function seg(id: string, labels: string[], key: keyof typeof opts) {
   });
 }
 seg('optDiff', DIFFICULTY_NAMES, 'diff');
-seg('optSide', ['Ukraine — Zelensky', 'Russia — Putin'], 'side');
+const sideEls = Array.from(document.querySelectorAll('#optSide .side')) as HTMLElement[];
+const setSide = (i: number) => { opts.side = i; sideEls.forEach((el, k) => el.classList.toggle('on', k === i)); document.body.dataset.side = '' + i; };
+sideEls.forEach((el, i) => { el.onclick = () => { setSide(i); audio.init(); applyVol(); audio.music?.start(); audio.ui('click'); }; });
+setSide(opts.side ? 1 : 0);
 seg('optSize', ['Small', 'Medium', 'Large'], 'size');
 seg('optDate', START_DATES.map(d => d[0]), 'date');
 seg('optGfx', ['Low', 'Medium', 'High'], 'gfx');
@@ -59,6 +65,7 @@ function start() {
   });
   $('spdVal').textContent = '1×';
   S = ses;
+  backdrop.stop();
   $('menu').classList.add('hidden'); $('hud').classList.remove('hidden'); $('end').classList.add('hidden'); $('pause').classList.add('hidden');
   ses.ui.toast(side ? 'Hostomel. Your columns are staged north-west of the Irpin. Take Kyiv.' : 'Kyiv. The invasion has begun. Hold the capital.');
   ses.ui.toast(`${START_DATES[opts.date][0]} · ${DIFFICULTY_NAMES[opts.diff]} · seed ${seed}`);
@@ -96,7 +103,7 @@ function showEnd(ses: Session) {
 function quit() {
   if (!S) return;
   cancelAnimationFrame(S.raf); S.ui.dispose(); S.r.dispose(); S = null;
-  audio.music?.stop(); audio.music?.start();
+  audio.music?.stop(); audio.music?.start(); backdrop.start();
   $('hud').classList.add('hidden'); $('pause').classList.add('hidden'); $('end').classList.add('hidden'); $('menu').classList.remove('hidden');
   const c = ($('overlay') as HTMLCanvasElement); c.getContext('2d')!.clearRect(0, 0, c.width, c.height);
   // fresh GL canvas for the next battle

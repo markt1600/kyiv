@@ -10,6 +10,8 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { DAY_SECS, DEF_LIST, Model, UnitDef } from './defs';
 import { World } from './world';
+import { Sky } from 'three/examples/jsm/objects/Sky.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { smooth } from './util';
 import { CELL, GameMap, VS } from './map';
 import { Game, Team, Unit, Wreck } from './sim';
@@ -263,6 +265,10 @@ export class Renderer {
   private debris!: THREE.InstancedMesh; private dPos = new Float32Array(360 * 3); private dVel = new Float32Array(360 * 3); private dRot = new Float32Array(360 * 4); private dLife = new Float32Array(360); private dSize = new Float32Array(360); private dHead = 0;
   private later: { t: number; fn: () => void }[] = []; shake = 0; private sunDir = new THREE.Vector3(0.55, 0.75, 0.35).normalize();
   private grade: ShaderPass | null = null;
+  private sky!: Sky; private skyEnv = new THREE.Scene(); private pmrem!: THREE.PMREMGenerator; private envRT: THREE.WebGLRenderTarget | null = null; private envT = 0; private envEl = 9;
+  private skyK = { value: 0.3 }; private skyNight = { value: new THREE.Color(0x05070c) };
+  /** planar reflection of the world in the rivers (High quality) */
+  private refRT: THREE.WebGLRenderTarget | null = null; private refCam = new THREE.PerspectiveCamera(); private noReflect: THREE.Object3D[] = []; private refM = new THREE.Matrix4();
   /** thermal drone-feed view */
   flir = false; private waterDepth: { depth: Uint8Array; dTex: THREE.DataTexture } | null = null; private terrainMatAttr!: THREE.BufferAttribute; private trackDirty = false; private trackT = 0; private pose = new WeakMap<Unit, number>();
   world!: World; private hemi!: THREE.HemisphereLight; night = 0; private rockets: { m: THREE.Mesh; vy: number; t: number; y0: number }[] = [];
@@ -286,16 +292,28 @@ export class Renderer {
     r.setPixelRatio(Math.min(window.devicePixelRatio, quality >= 2 ? 2 : 1.25));
     r.shadowMap.enabled = quality >= 1; r.shadowMap.type = THREE.PCFSoftShadowMap;
     r.localClippingEnabled = true;
-    r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.05;
+    r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.2;
     this.camera = new THREE.PerspectiveCamera(42, 1, 2, 4000);
     this.scene.background = new THREE.Color(bio.sky).multiplyScalar(0.35);
-    this.scene.fog = new THREE.Fog(new THREE.Color(bio.sky).multiplyScalar(0.35).getHex(), 900, 3200);
-    const pm = new THREE.PMREMGenerator(r);
+    this.scene.fog = new THREE.Fog(new THREE.Color(bio.sky).multiplyScalar(0.35).getHex(), 500, 3600);
+    // physically based sky (Preetham scattering). It is both what you see at the horizon and, pre-filtered into an environment
+    // map, the light every surface is lit and reflected by — glass, wet mud, steel and water all mirror the real sky of the hour.
+    const pm = this.pmrem = new THREE.PMREMGenerator(r);
     this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
     this.scene.environmentIntensity = 0.35;
+    const mkSky = () => {
+      const sk = new Sky(); sk.scale.setScalar(3400); sk.frustumCulled = false; sk.renderOrder = -10;
+      return sk;
+    };
+    this.sky = mkSky();
+    const sm = this.sky.material as THREE.ShaderMaterial;
+    sm.uniforms.uK = this.skyK; sm.uniforms.uNightCol = this.skyNight;
+    sm.fragmentShader = 'uniform float uK; uniform vec3 uNightCol;\n' + sm.fragmentShader.replace('gl_FragColor = vec4( retColor, 1.0 );', 'gl_FragColor = vec4( retColor * uK + uNightCol, 1.0 );');
+    this.scene.add(this.sky);
+    const sk2 = new THREE.Mesh(this.sky.geometry, sm); sk2.scale.setScalar(3400); this.skyEnv.add(sk2);
     this.hemi = new THREE.HemisphereLight(bio.sky, 0x30281e, 0.95); this.scene.add(this.hemi);
     const sun = this.sun = new THREE.DirectionalLight(bio.sun, bio.lava ? 1.6 : 2.4);
-    sun.castShadow = quality >= 1; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.6;
+    sun.castShadow = quality >= 1; sun.shadow.mapSize.set(quality >= 2 ? 4096 : 2048, quality >= 2 ? 4096 : 2048); sun.shadow.radius = 2.2; sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.6;
     this.scene.add(sun, sun.target);
 
     const plate = platingTextures();
@@ -354,8 +372,8 @@ export class Renderer {
       { const sh = clamp(1 - (h - map.waterY) / 4, 0, 1); tmp.lerp(cs, sh); }
       tmp.lerp(cr, clamp((slope - 0.42) * 3, 0, 1));
       const r = rd[k];
-      if (r < 7) { tmp.lerp(gravel, 0.4 * (1 - smooth(3.5, 7, r))); tmp.lerp(asphalt, 1 - smooth(2, 4.2, r)); }
-      aMat[k] = Math.max(1 - smooth(2, 4.5, r), urb * 0.45);
+      if (r < 8) tmp.lerp(gravel, 0.5 * (1 - smooth(3.5, 8, r)));
+      void asphalt; aMat[k] = urb * 0.45;
       tmp.multiplyScalar(0.78 + nz * 0.44);
       col[k * 3] = tmp.r; col[k * 3 + 1] = tmp.g; col[k * 3 + 2] = tmp.b;
     }
@@ -376,8 +394,42 @@ export class Renderer {
     const tg = new THREE.BufferGeometry();
     tg.setAttribute('position', new THREE.BufferAttribute(pos, 3)); tg.setAttribute('color', new THREE.BufferAttribute(col, 3)); tg.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); tg.setAttribute('aMat', new THREE.BufferAttribute(aMat, 1));
     tg.setIndex(new THREE.BufferAttribute(idx, 1)); tg.computeVertexNormals();
-    const detail = noiseTexture(512, (x, y) => { const sp = hash2(x, y, 77), v = 105 + 150 * (tile(x, y, 512, 12, 3) * 0.3 + tile(x, y, 512, 48, 5) * 0.3 + tile(x, y, 512, 160, 6) * 0.25 + sp * sp * 0.22) - (sp > 0.985 ? 70 : 0) + (sp < 0.012 ? 60 : 0); return [v, v, v * 0.96, 255]; });
-    detail.repeat.set(map.size / 30, map.size / 30); detail.colorSpace = THREE.SRGBColorSpace;
+    // signed-distance field of the road network: lets the shader draw crisp kerbs and lane markings whatever the mesh resolution
+    const RS = 1024, rdf = new Uint8Array(RS * RS).fill(255), rtx = map.size / RS;
+    for (const pts of map.roads) for (let s = 0; s < pts.length - 1; s++) {
+      const ax = pts[s][0], az = pts[s][1], bx = pts[s + 1][0], bz = pts[s + 1][1], dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz || 1;
+      const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - 14) / rtx)), i1 = Math.min(RS - 1, Math.ceil((Math.max(ax, bx) + 14) / rtx));
+      const j0 = Math.max(0, Math.floor((Math.min(az, bz) - 14) / rtx)), j1 = Math.min(RS - 1, Math.ceil((Math.max(az, bz) + 14) / rtx));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const px = (i + 0.5) * rtx, pz = (j + 0.5) * rtx, t = clamp(((px - ax) * dx + (pz - az) * dz) / l2, 0, 1), d = Math.min(255, Math.hypot(px - ax - dx * t, pz - az - dz * t) * 8);
+        if (d < rdf[j * RS + i]) rdf[j * RS + i] = d;
+      }
+    }
+    const roadTex = new THREE.DataTexture(rdf, RS, RS, THREE.RedFormat); roadTex.magFilter = roadTex.minFilter = THREE.LinearFilter; roadTex.needsUpdate = true;
+    // hard surfaces: aggregate speckle, patched repairs, cracks, oil
+    const hc = document.createElement('canvas'); hc.width = hc.height = 512; const hx2 = hc.getContext('2d')!;
+    { let sd = 5; const rn = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+      const im = hx2.createImageData(512, 512);
+      for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) { const sp = hash2(x, y, 41), v = 118 + 60 * (tile(x, y, 512, 9, 141) - 0.5) + 44 * (tile(x, y, 512, 70, 143) - 0.5) + (sp - 0.5) * 70 + (sp > 0.97 ? 50 : 0), i = (y * 512 + x) * 4; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; }
+      hx2.putImageData(im, 0, 0);
+      for (let k = 0; k < 14; k++) { hx2.fillStyle = `rgba(${rn() < 0.5 ? 40 : 190},${rn() < 0.5 ? 40 : 190},${120},${0.05 + rn() * 0.1})`; hx2.fillRect(rn() * 512, rn() * 512, 30 + rn() * 120, 20 + rn() * 90); }
+      for (let k = 0; k < 46; k++) { let x = rn() * 512, y = rn() * 512, a = rn() * 6.283; hx2.strokeStyle = `rgba(12,12,12,${0.35 + rn() * 0.4})`; hx2.lineWidth = 0.6 + rn() * 1.4; hx2.beginPath(); hx2.moveTo(x, y); for (let q = 0; q < 14; q++) { a += (rn() - 0.5) * 1.3; x += Math.cos(a) * (6 + rn() * 12); y += Math.sin(a) * (6 + rn() * 12); hx2.lineTo(x, y); } hx2.stroke(); }
+      for (let k = 0; k < 10; k++) { const g = hx2.createRadialGradient(0, 0, 0, 0, 0, 20 + rn() * 26); g.addColorStop(0, 'rgba(8,8,10,0.4)'); g.addColorStop(1, 'rgba(8,8,10,0)'); hx2.save(); hx2.translate(rn() * 512, rn() * 512); hx2.fillStyle = g; hx2.fillRect(-50, -50, 100, 100); hx2.restore(); }
+    }
+    const hardTex = new THREE.CanvasTexture(hc); hardTex.wrapS = hardTex.wrapT = THREE.RepeatWrapping; hardTex.anisotropy = 8;
+    // organic ground: thousands of individual blades, stems, clods and stones rather than smooth noise
+    const oc = document.createElement('canvas'); oc.width = oc.height = 512; const ox2 = oc.getContext('2d')!;
+    { let sd = 9; const rn = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+      const im = ox2.createImageData(512, 512);
+      for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) { const sp = hash2(x, y, 77), v = 150 + 70 * (tile(x, y, 512, 12, 3) - 0.5) + 60 * (tile(x, y, 512, 48, 5) - 0.5) + 40 * (tile(x, y, 512, 160, 6) - 0.5) + (sp - 0.5) * 36, i = (y * 512 + x) * 4; im.data[i] = im.data[i + 1] = v; im.data[i + 2] = v * 0.96; im.data[i + 3] = 255; }
+      ox2.putImageData(im, 0, 0);
+      for (let k = 0; k < 16000; k++) { const x = rn() * 512, y = rn() * 512, a = -1.57 + (rn() - 0.5) * 1.6, l = 3 + rn() * 9, v = rn() < 0.55 ? 205 + rn() * 50 : 60 + rn() * 70; ox2.strokeStyle = `rgba(${v * 0.96},${v},${v * 0.88},${0.25 + rn() * 0.45})`; ox2.lineWidth = 0.7 + rn() * 0.8; ox2.beginPath(); ox2.moveTo(x, y); ox2.quadraticCurveTo(x + Math.cos(a) * l * 0.5 + (rn() - 0.5) * 3, y + Math.sin(a) * l * 0.5, x + Math.cos(a) * l, y + Math.sin(a) * l); ox2.stroke(); }
+      for (let k = 0; k < 500; k++) { const v = 90 + rn() * 130; ox2.fillStyle = `rgba(${v},${v * 0.97},${v * 0.92},0.8)`; ox2.beginPath(); ox2.ellipse(rn() * 512, rn() * 512, 0.8 + rn() * 2.4, 0.6 + rn() * 1.6, rn() * 3, 0, 6.3); ox2.fill(); }
+    }
+    const organicTex = new THREE.CanvasTexture(oc); organicTex.wrapS = organicTex.wrapT = THREE.RepeatWrapping; organicTex.anisotropy = 8; organicTex.colorSpace = THREE.SRGBColorSpace;
+    organicTex.repeat.set(map.size / 26, map.size / 26);
+    const detail0 = noiseTexture(512, (x, y) => { const sp = hash2(x, y, 77), v = 105 + 150 * (tile(x, y, 512, 12, 3) * 0.3 + tile(x, y, 512, 48, 5) * 0.3 + tile(x, y, 512, 160, 6) * 0.25 + sp * sp * 0.22) - (sp > 0.985 ? 70 : 0) + (sp < 0.012 ? 60 : 0); return [v, v, v * 0.96, 255]; });
+    void detail0; const detail = organicTex;
     this.terrainMatAttr = tg.attributes.aMat as THREE.BufferAttribute;
     this.terrainCol = tg.attributes.color as THREE.BufferAttribute; this.terrainPos = tg.attributes.position as THREE.BufferAttribute; this.terrainNrm = tg.attributes.normal as THREE.BufferAttribute;
     const tnrm = normalTexture(256, (x, y) => tile(x, y, 256, 10, 31) + tile(x, y, 256, 28, 33) * 0.5 + tile(x, y, 256, 70, 35) * 0.25, 5);
@@ -386,26 +438,42 @@ export class Renderer {
       const lo = tile(x, y, 256, 4, 41) * 0.6 + tile(x, y, 256, 9, 43) * 0.3 + tile(x, y, 256, 20, 45) * 0.1, hi = tile(x, y, 256, 24, 47) * 0.6 + tile(x, y, 256, 60, 49) * 0.4;
       return [lo * 255, hi * 255, 0, 255];
     });
-    const tmat = new THREE.MeshStandardMaterial({ vertexColors: true, map: detail, normalMap: tnrm, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.94, metalness: 0, envMapIntensity: 0.2 });
+    const tmat = new THREE.MeshStandardMaterial({ vertexColors: true, map: detail, normalMap: tnrm, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.94, metalness: 0, envMapIntensity: 0.55 });
     tmat.onBeforeCompile = sh => {
-      sh.uniforms.uTime = this.uTime; sh.uniforms.uCloud = { value: cloud };
+      sh.uniforms.uTime = this.uTime; sh.uniforms.uCloud = { value: cloud }; sh.uniforms.uRoad = { value: roadTex }; sh.uniforms.uHard = { value: hardTex }; sh.uniforms.uSize = { value: map.size };
       sh.uniforms.uSnow = this.uSeason.snow; sh.uniforms.uMud = this.uSeason.mud; sh.uniforms.uDry = this.uSeason.dry;
       sh.vertexShader = 'varying vec2 vWxz; attribute float aMat; varying float vMat;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vWxz = position.xz; vMat = aMat;');
-      sh.fragmentShader = 'varying vec2 vWxz; varying float vMat; uniform sampler2D uCloud; uniform float uTime, uSnow, uMud, uDry;\n' + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      sh.fragmentShader = 'varying vec2 vWxz; varying float vMat; uniform sampler2D uCloud, uRoad, uHard; uniform float uTime, uSnow, uMud, uDry, uSize;\n' + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
         float cl = smoothstep(0.42, 0.68, texture2D(uCloud, vWxz/1100.0 + uTime*vec2(0.0035, 0.002)).r);
         diffuseColor.rgb *= mix(1.0, 0.6, cl);`).replace('#include <color_fragment>', `#include <color_fragment>
         float n1 = texture2D(uCloud, vWxz/41.0).g, n2 = texture2D(uCloud, vWxz/260.0).r, n3 = texture2D(uCloud, vWxz/6.3).g;
         diffuseColor.rgb *= (0.74 + 0.5*n1) * (0.86 + 0.28*n3);
+        // paved ground: cracked, patched concrete in the districts; asphalt roads with worn edge lines and centre dashes
+        float rdist = texture2D(uRoad, vWxz/uSize).r * 31.875;
+        float roadK = 1.0 - smoothstep(3.1, 3.6, rdist), hk = max(vMat, roadK);
+        vec3 hard = texture2D(uHard, vWxz/17.0).rgb;
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*(0.5 + 1.0*hard), vMat*0.75);
+        vec3 asph = vec3(0.105, 0.108, 0.112)*(0.55 + 0.9*hard.r)*(0.85 + 0.3*n2);
+        float wear = smoothstep(0.3, 0.62, texture2D(uCloud, vWxz/19.0).g);
+        float edge = 1.0 - smoothstep(0.09, 0.2, abs(rdist - 2.75));
+        float dash = (1.0 - smoothstep(0.09, 0.18, rdist))*step(0.5, fract((vWxz.x + vWxz.y)/7.5));
+        asph = mix(asph, vec3(0.42, 0.42, 0.39), max(edge, dash)*wear*0.85);
+        asph = mix(asph, diffuseColor.rgb*0.8, (1.0 - smoothstep(2.4, 3.6, rdist))*0.0 + smoothstep(2.9, 3.6, rdist)*0.5*n3);
+        diffuseColor.rgb = mix(diffuseColor.rgb, asph, roadK);
         // high summer bleaches the grass; the thaw turns everything off the roads to mud; winter buries it
-        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*vec3(1.2, 1.05, 0.7), uDry*0.55*(1.0 - vMat));
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.125, 0.085)*(0.6 + 0.9*n1), uMud*(0.4 + 0.45*n2)*(1.0 - vMat));
-        float sc = smoothstep(0.78 - uSnow*0.95, 1.0 - uSnow*0.95, n1*0.5 + n2*0.5) * (1.0 - 0.6*vMat);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.83, 0.86, 0.91)*(0.86 + 0.2*n3), sc*min(1.0, uSnow*1.4));`);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*vec3(1.2, 1.05, 0.7), uDry*0.55*(1.0 - hk));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.125, 0.085)*(0.6 + 0.9*n1), uMud*(0.4 + 0.45*n2)*(1.0 - hk));
+        float sc = smoothstep(0.78 - uSnow*0.95, 1.0 - uSnow*0.95, n1*0.5 + n2*0.5) * (1.0 - 0.6*hk);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.83, 0.86, 0.91)*(0.86 + 0.2*n3), sc*min(1.0, uSnow*1.4));`).replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        // standing water in the mud and on wet asphalt mirrors the sky; packed snow has a soft sheen
+        roughnessFactor = mix(roughnessFactor, 0.78, roadK);
+        roughnessFactor = mix(roughnessFactor, 0.22, uMud*smoothstep(0.45, 0.7, n2*0.6 + n1*0.4)*(1.0 - 0.5*hk));
+        roughnessFactor = mix(roughnessFactor, 0.6, sc*min(1.0, uSnow*1.4));`);
     };
     const terrain = new THREE.Mesh(tg, tmat);
     terrain.receiveShadow = true; this.scene.add(terrain);
     // skirt
-    const skirt = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000), new THREE.MeshBasicMaterial({ color: new THREE.Color(bio.fogCol) }));
+    const skirt = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000), new THREE.MeshBasicMaterial({ color: new THREE.Color(bio.mid).multiplyScalar(0.32) }));
     skirt.rotation.x = -Math.PI / 2; skirt.position.set(map.size / 2, Math.min(-2, map.waterY - 3), map.size / 2); this.scene.add(skirt);
 
     // ── fog of war ──
@@ -414,7 +482,7 @@ export class Renderer {
     this.fogTex = new THREE.DataTexture(this.fogData as any, n, n, THREE.RGBAFormat);
     this.fogTex.magFilter = this.fogTex.minFilter = THREE.LinearFilter; this.fogTex.needsUpdate = true;
     const fogMat = new THREE.MeshBasicMaterial({ color: bio.fogCol, alphaMap: this.fogTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8, fog: false });
-    const fogMesh = new THREE.Mesh(tg, fogMat); fogMesh.renderOrder = 5; this.scene.add(fogMesh);
+    const fogMesh = new THREE.Mesh(tg, fogMat); fogMesh.renderOrder = 5; this.scene.add(fogMesh); this.noReflect.push(fogMesh, terrain, skirt);
 
     // ── water / lava ──
     if (map.waterY > -50) {
@@ -435,7 +503,8 @@ export class Renderer {
         wf.rotation.x = -Math.PI / 2; wf.position.set(map.size / 2, map.waterY + 0.15, map.size / 2); wf.renderOrder = 6; this.scene.add(wf);
       } else {
         const w = makeWater(map, this.fogTex, this.sunDir, bio.sun);
-        this.water = w.mesh; this.waterUni = w.uni; this.waterDepth = w; this.scene.add(w.mesh);
+        this.water = w.mesh; this.waterUni = w.uni; this.waterDepth = w; this.scene.add(w.mesh); this.noReflect.push(w.mesh);
+        if (quality >= 2) { this.refRT = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType }); w.uni.uRef.value = this.refRT.texture; w.uni.uRefM.value = this.refM; w.uni.uRefOn.value = 1; }
       }
     }
 
@@ -508,6 +577,14 @@ export class Renderer {
       const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4 });
       this.composer = new EffectComposer(r, rt);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
+      if (quality >= 2) {
+        // ground-truth ambient occlusion: contact shadows under vehicles, in doorways, between buildings. Foliage cards are left out of it.
+        const ao = new GTAOPass(this.scene, this.camera, 4, 4);
+        ao.blendIntensity = 0.7; ao.updateGtaoMaterial({ radius: 5.5, distanceExponent: 1.2, thickness: 1.6, scale: 1.15, samples: 12, screenSpaceRadius: false } as any);
+        const ov = ao.overrideVisibility.bind(ao), skip = [...this.scenery.foliage, ...this.noReflect.filter(o => o !== terrain), this.sky];
+        ao.overrideVisibility = () => { ov(); for (const o of skip) o.visible = false; };
+        this.composer.addPass(ao);
+      }
       this.bloomPass = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.32, 0.5, 0.95); this.composer.addPass(this.bloomPass);
       this.composer.addPass(new OutputPass());
       this.grade = new ShaderPass({
@@ -541,11 +618,24 @@ export class Renderer {
     else { this.sunDir.set(-0.35, 0.82, 0.3).normalize(); _c.setHex(0x9db4e0); this.sun.intensity = 1.0; }
     this.sun.color.copy(_c);
     const sky = _c.copy(this.skyDay).lerp(_c2.setHex(0x8e959b), overcast).lerp(_c2.setHex(0xe09060), (1 - dayK) * (1 - night) * 0.45);
-    this.hemi.color.copy(sky).lerp(_c2.setHex(0x5a6c94), night); this.hemi.intensity = lerp(1.0, 0.85, night) * (1 - 0.1 * overcast);
+    this.hemi.color.copy(sky).lerp(_c2.setHex(0x5a6c94), night); this.hemi.intensity = lerp(0.85, 0.9, night) * (1 - 0.1 * overcast);
     if (this.waterUni) { this.waterUni.uSunDir.value.copy(this.sunDir); this.waterUni.uSky.value.copy(sky).lerp(_c2.setHex(0x0a0e18), night * 0.9); this.waterUni.uSunCol.value.copy(this.sun.color).multiplyScalar(night > 0.5 ? 0.25 : 1); this.waterUni.uIce.value = g.snow; }
-    sky.multiplyScalar(0.36).lerp(_c2.setHex(0x0a0e16), night);
+    // the sky dome follows the real sun (which may be below the horizon); haze thickens under overcast
+    const su = (this.sky.material as THREE.ShaderMaterial).uniforms, az0 = ang * 0.5 + 0.5;
+    su.sunPosition.value.set(Math.cos(az0) * 0.8, el * 0.9, Math.sin(az0) * 0.8).normalize();
+    su.turbidity.value = lerp(2.6, 16, overcast); su.rayleigh.value = lerp(1.5, 0.5, overcast) + (1 - dayK) * 1.2 * (1 - night);
+    su.mieCoefficient.value = 0.004 + 0.03 * overcast; su.mieDirectionalG.value = 0.84;
+    this.skyK.value = lerp(0.26, 0.2, overcast); this.skyNight.value.setHex(0x06090f).multiplyScalar(night);
+    this.sky.position.copy(this.camera.position);
+    this.envT -= dt;
+    if (this.envT <= 0 || Math.abs(el - this.envEl) > 0.05) { // re-filter the sky into the lighting environment as the hour changes
+      this.envT = 6; this.envEl = el;
+      const rt = this.pmrem.fromScene(this.skyEnv, 0, 1, 6000);
+      this.scene.environment = rt.texture; if (this.envRT) this.envRT.dispose(); this.envRT = rt;
+    }
+    sky.multiplyScalar(lerp(0.62, 0.5, overcast)).lerp(_c2.setHex(0x0a0e16), night);
     (this.scene.background as THREE.Color).copy(sky); (this.scene.fog as THREE.Fog).color.copy(sky);
-    this.scene.environmentIntensity = lerp(0.35, 0.1, night);
+    this.scene.environmentIntensity = lerp(1.35, 0.6, night);
     if (this.bloomPass) this.bloomPass.strength = lerp(0.3, 0.6, night);
     this.uSeason.snow.value = g.snow; this.uSeason.mud.value = g.mud; this.uSeason.dry.value = g.dry;
     if (this.grade) this.grade.uniforms.uFlir.value = this.flir ? 1 : 0;
@@ -558,6 +648,7 @@ export class Renderer {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
     if (this.composer) { this.composer.setPixelRatio(this.renderer.getPixelRatio()); this.composer.setSize(w, h); }
+    if (this.refRT) this.refRT.setSize(Math.round(w * 0.6), Math.round(h * 0.6));
     const sc = h * this.renderer.getPixelRatio() / (2 * Math.tan(this.camera.fov * Math.PI / 360));
     this.fire.mat.uniforms.scale.value = sc; this.smoke.mat.uniforms.scale.value = sc;
   }
@@ -1193,6 +1284,22 @@ export class Renderer {
     this.fogTex.needsUpdate = true;
     if (this.waterTex) { this.waterTex.offset.x = T * 0.006; this.waterTex.offset.y = T * 0.004; }
 
+    if (this.refRT && this.water && !this.flir) {
+      // mirror the camera in the water plane and render what the river reflects: bridges, buildings, fires, the sky
+      const cam = this.camera, v = this.refCam, wy = map.waterY, rr = this.renderer;
+      v.fov = cam.fov; v.aspect = cam.aspect; v.near = cam.near; v.far = cam.far; v.updateProjectionMatrix();
+      v.position.set(cam.position.x, 2 * wy - cam.position.y, cam.position.z);
+      _v.set(0, 1, 0).applyQuaternion(cam.quaternion); v.up.set(_v.x, -_v.y, _v.z);
+      cam.getWorldDirection(_v); v.lookAt(v.position.x + _v.x, v.position.y - _v.y, v.position.z + _v.z); v.updateMatrixWorld();
+      this.refM.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1).multiply(v.projectionMatrix).multiply(v.matrixWorldInverse);
+      for (const o of this.noReflect) o.visible = false;
+      this.sky.position.copy(v.position); this.sky.updateMatrixWorld();
+      const au = rr.shadowMap.autoUpdate; rr.shadowMap.autoUpdate = false;
+      rr.setRenderTarget(this.refRT); rr.clear(); rr.render(this.scene, v); rr.setRenderTarget(null);
+      rr.shadowMap.autoUpdate = au;
+      for (const o of this.noReflect) o.visible = true;
+      this.sky.position.copy(cam.position); this.sky.updateMatrixWorld();
+    }
     if (this.composer) this.composer.render(dt); else this.renderer.render(this.scene, this.camera);
   }
 }
