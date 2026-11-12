@@ -573,9 +573,11 @@ export class UI {
     const cells = this.rowCells(this.placeStart!, end, def).filter(c => this.free(def, c.cx, c.cz));
     const bs = this.mine().filter(u => u.def.builds.includes(def.id) && !u.def.factory);
     if (!cells.length || !bs.length) { this.audio.ui('error'); return; }
-    cells.forEach((c, i) => { for (const u of bs) this.game.giveBuild(u, def, c.cx, c.cz, e.shiftKey || i > 0); });
+    // new buildings join the end of the builders' queue; holding Shift clears what they were doing and starts afresh
+    cells.forEach((c, i) => { for (const u of bs) this.game.giveBuild(u, def, c.cx, c.cz, !e.shiftKey || i > 0); });
     this.audio.ui('place');
-    if (!e.shiftKey) { this.placing = null; this.panelKey = ''; }
+    this.placing = null; this.panelKey = '';
+    const q = bs[0].orders.filter(o => o.type === 'build').length; if (q > 1) this.toast(nm(def, this.me.fac) + ' queued (' + q + ' in the queue)');
   }
 
   // ───────────── per-frame ─────────────
@@ -755,7 +757,7 @@ export class UI {
     const cv = $('civ'); cv.textContent = 'Civilians ' + g.civAlive + '/' + g.civTotal + (me.condemn ? ' · sanctions −' + Math.round(Math.min(0.4, me.condemn * 0.015) * 100) + '%' : me.fac === 0 ? ' · aid +' + me.aid.toFixed(1) : '');
     cv.className = me.condemn ? 'bad' : '';
     $('wind').textContent = 'Wind ' + Math.round(g.wind * 100) + '%' + (me.sat ? ' · SAT' + (me.sat & 2 ? '+GPS' : '') : '');
-    $('modeHint').textContent = this.placing && this.mobile ? (this.placing.span ? 'Tap a destroyed bridge: ' : this.placing.reuse ? 'Tap a building to requisition: ' : 'Drag to position, release to build: ') + nm(this.placing, me.fac) : this.placing ? (this.placing.span ? 'Click a destroyed bridge to lay a ' : this.placing.reuse ? 'Requisition a building for ' : 'Place ') + nm(this.placing, me.fac) + ' — Shift: multiple · drag: row · right-click: cancel'
+    $('modeHint').textContent = this.placing && this.mobile ? (this.placing.span ? 'Tap a destroyed bridge: ' : this.placing.reuse ? 'Tap a building to requisition: ' : 'Drag to position, release to build: ') + nm(this.placing, me.fac) : this.placing ? (this.placing.span ? 'Click a destroyed bridge to lay a ' : this.placing.reuse ? 'Requisition a building for ' : 'Place ') + nm(this.placing, me.fac) + ' — adds to the build queue · Shift: build now instead · drag: row · right-click: cancel'
       : this.mode ? ({ fight: 'Attack', patrol: 'Patrol', guard: 'Guard', repair: 'Repair', reclaim: 'Salvage area', move: 'Move', bombard: 'Fire at area' } as any)[this.mode] + (this.mobile ? ' — tap target' : ' — click target') : '';
     this.refreshPanel();
     this.refreshRoster();
