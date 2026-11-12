@@ -212,3 +212,8 @@ body.phone #modeHint { top: 84px; } body.phone #toasts { top: 108px; }
 .g-chk { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); margin: 12px 0 10px; cursor: pointer; } .g-chk input { accent-color: #e3bd6c; }
 #btnGuide { width: 100%; padding: 11px; font-size: 14px; letter-spacing: 0.18em; text-transform: uppercase; background: linear-gradient(#e3bd6c, #b98f3c); color: #15110a; border: 0; border-radius: 9px; font-weight: 700; }
 body.phone .guide-card { padding: 12px 16px; } body.phone .guide-card li { margin: 3px 0; font-size: 12px; } body.phone .guide-card h2 { font-size: 17px; margin: 4px 0 6px; }
+
+#btnAuto { font-size: 11px; padding: 4px 9px; white-space: nowrap; } #btnAuto.on { border-color: #6fe08a; color: #b4f5c2; background: #16301e; }
+#optAutoRow.off { opacity: 0.4; pointer-events: none; } .optnote { font-size: 11px; color: #8d979c; margin: -3px 0 6px 78px; }
+body.phone .optnote { display: none; } body.mobile #btnAuto { font-size: 10px; padding: 3px 6px; }
+#guideAuto:empty { display: none; } #guideAuto { color: #b4f5c2; }

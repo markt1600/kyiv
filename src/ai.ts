@@ -33,6 +33,9 @@ export class AI {
   private enemyAir = 0; private enemyDef = 0; private lastDefend = -999; private lastRaid = 0; private lastScout = 0;
   private rallyX = 0; private rallyZ = 0; private firstFac: string;
   private rng: () => number;
+  /** assistant mode, for a human player's side: run construction, engineer production and research along the standard
+   *  opening, but leave every combat unit and every army decision to the player */
+  assist = false;
   private cutOff = false; private cutT = -9999; private pressure = 0; private lastCut = -9999;
   private labs: Unit[] = []; private kamis: Unit[] = []; private enemyDrones = 0;
 
@@ -60,6 +63,13 @@ export class AI {
     }
     this.pressure *= 0.97;
     for (const b of this.builders) this.manageBuilder(b);
+    if (this.assist) {
+      // the player decides what army to raise; the assistant only keeps enough engineers on the job
+      const eng = this.have('engineer') + this.have('dozer'), want = Math.min(4, 2 + Math.floor(this.factories.length / 2));
+      for (const f of this.factories) if (f.built && f.def.id === 'barracks' && !f.queue.length && !f.buildee && eng < want) { f.queue.push(DEFS.engineer); break; }
+      this.research();
+      return;
+    }
     for (const f of this.factories) if (f.built && !f.queue.length && !f.buildee) this.produce(f);
     this.research();
     this.military();
@@ -86,7 +96,7 @@ export class AI {
       else if (d.bp) {
         this.builders.push(u);
         for (const o of u.orders) if (o.type === 'build' && !o.target) this.pend[o.def!.id] = (this.pend[o.def!.id] || 0) + 1;
-      } else if (d.cls !== 'building' && d.weapons.length || d.id === 'recon') {
+      } else if (!this.assist && (d.cls !== 'building' && d.weapons.length || d.id === 'recon')) {
         if (!this.known.has(u)) {
           this.known.add(u);
           if (d.cls === 'air' && !d.hover) { /* planes managed separately */ }

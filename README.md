@@ -99,6 +99,10 @@ A card with these orders appears when a battle starts (tick "don't show again" t
 5. Design Bureau, and start research (FPV Drone Warfare or Modern Armour first)
 6. Motor Pool, then a Field Repair Depot and anti-aircraft cover
 
+On Easy and Medium there is an **Auto-build** option (menu, and a toggle button at the top of the screen in battle). When
+it is on, an assistant runs your construction, engineer production and research in this order; you still raise and command
+the army. Anything you order a builder to do yourself takes priority.
+
 ## Controls
 
 - **Click an enemy** with armed units selected to attack it (it highlights under the pointer; Alt-click inspects instead). When it is destroyed they fight on against nearby enemies
@@ -109,7 +113,7 @@ A card with these orders appears when a battle starts (tick "don't show again" t
 - The **roster** down the left edge lists every kind of unit you have with a count: click a tile to select all of that kind (Shift adds, a second click jumps the camera to them)
 - **V** supply ranges · **T** thermal drone view · **H** find command post · **Tab** idle builder
 - **F** first-person view of the selected unit (drag to look, wheel to zoom, **Tab** next unit, **F** / **Esc** to return)
-- Arrows / screen edge / middle-drag pan · wheel zoom · **Z / X** rotate · **Space** pause · **+ / −** speed
+- Arrows / screen edge / middle-drag pan · wheel zoom · **Z / X** rotate · **Space** pause · **+ / −** speed (0.5× to 5×)
 
 ### Touch (phones and tablets)
 

@@ -18,18 +18,22 @@ const TOUCH = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window) && wind
 const PHONE = TOUCH && Math.min(window.screen.width, window.screen.height) < 600;
 const MOBILE = TOUCH || new URLSearchParams(location.search).has('mobile');
 if (MOBILE) { document.body.classList.add('mobile'); if (PHONE) document.body.classList.add('phone'); Renderer.mobile = true; }
-const opts = { side: 0, diff: 1, size: MOBILE ? 0 : 1, date: 0, gfx: PHONE ? 0 : MOBILE ? 1 : 2, seed: Math.floor(Math.random() * 99999) };
+const opts = { side: 0, diff: 1, size: MOBILE ? 0 : 1, date: 0, auto: 0, gfx: PHONE ? 0 : MOBILE ? 1 : 2, seed: Math.floor(Math.random() * 99999) };
 try { Object.assign(opts, JSON.parse(localStorage.getItem((MOBILE ? 'kyiv-opts-m' : 'kyiv-opts')) || '{}'), { seed: opts.seed }); } catch { /* ignore */ }
 
 function seg(id: string, labels: string[], key: keyof typeof opts) {
   const el = $(id); el.innerHTML = '';
   labels.forEach((l, i) => {
     const b = document.createElement('button'); b.textContent = l; if (opts[key] === i) b.className = 'on';
-    b.onclick = () => { opts[key] = i; seg(id, labels, key); audio.init(); applyVol(); audio.music?.start(); audio.ui('click'); };
+    b.onclick = () => { opts[key] = i; seg(id, labels, key); refreshAuto(); audio.init(); applyVol(); audio.music?.start(); audio.ui('click'); };
     el.appendChild(b);
   });
 }
 seg('optDiff', DIFFICULTY_NAMES, 'diff');
+seg('optAuto', ['Off', 'On'], 'auto');
+/** auto-build is a learning aid: offered on Easy and Medium only */
+function refreshAuto() { const ok = opts.diff <= 1; $('optAutoRow').classList.toggle('off', !ok); $('optAutoNote').textContent = ok ? 'Builds your base in the recommended order. Toggle it any time in battle.' : 'Available on Easy and Medium.'; }
+refreshAuto();
 const sideEls = Array.from(document.querySelectorAll('#optSide .side')) as HTMLElement[];
 const setSide = (i: number) => { opts.side = i; sideEls.forEach((el, k) => el.classList.toggle('on', k === i)); document.body.dataset.side = '' + i; };
 sideEls.forEach((el, i) => { el.onclick = () => { setSide(i); audio.init(); applyVol(); audio.music?.start(); audio.ui('click'); }; });
@@ -48,9 +52,9 @@ for (const k of ['music', 'sfx'] as const) {
   const el = $('vol' + k) as HTMLInputElement; el.value = '' + Math.round(vol[k] * 100);
   el.oninput = () => { vol[k] = +el.value / 100; applyVol(); try { localStorage.setItem('kyiv-vol', JSON.stringify(vol)); } catch { /* ignore */ } };
 }
-interface Session { game: Game; r: Renderer; ui: UI; ais: AI[]; me: Team; raf: number; paused: boolean; speed: number; ended: boolean }
+interface Session { game: Game; r: Renderer; ui: UI; ais: AI[]; me: Team; raf: number; paused: boolean; speed: number; ended: boolean; auto: boolean; helper: AI }
 let S: Session | null = null;
-const SPEEDS = [0.5, 1, 1.5, 2, 3];
+const SPEEDS = [0.5, 1, 1.5, 2, 3, 4, 5];
 
 // ───────────── title screen: a live AI-vs-AI battle behind the menu, with a roaming camera ─────────────
 interface Attract { game: Game; r: Renderer | null; ais: AI[]; raf: number; hot: { x: number; z: number; t: number }[]; tx: number; tz: number; cut: number; quiet: number }
@@ -141,7 +145,10 @@ function start() {
   $('leader').textContent = TEAM_NAMES[side] + ' · ' + LEADERS[side]; $('leader').className = side ? 'ru' : 'ua';
   const canvas = $('gl') as HTMLCanvasElement;
   const r = new Renderer(canvas, game, me, opts.gfx);
-  const ses: Session = { game, r, ui: null as any, ais: game.teams.filter(t => t.ai).map(t => new AI(game, t)), me, raf: 0, paused: false, speed: 1, ended: false };
+  const ses: Session = { game, r, ui: null as any, ais: game.teams.filter(t => t.ai).map(t => new AI(game, t)), me, raf: 0, paused: false, speed: 1, ended: false, auto: !!opts.auto && opts.diff <= 1, helper: null as any };
+  // the build assistant: the same planner the AI uses, driving only this side's construction, engineers and research
+  ses.helper = new AI(game, me); ses.helper.assist = true;
+  setAuto(ses, ses.auto, true);
   ses.ui = new UI(game, r, me, audio, icons, {
     pause: () => { if (ses.ended && !$('end').classList.contains('hidden')) return; if (!$('guide').classList.contains('hidden')) return; ses.paused = !ses.paused; $('pause').classList.toggle('hidden', !ses.paused); },
     speed: d => { ses.speed = Math.max(0, Math.min(SPEEDS.length - 1, ses.speed + d)); $('spdVal').textContent = SPEEDS[ses.speed] + '×'; },
@@ -165,7 +172,7 @@ function start() {
     if (!ses.paused) {
       acc += dt * SPEEDS[ses.speed];
       let n = 0;
-      while (acc >= DT && n < 8) { for (const a of ses.ais) a.update(); game.step(); acc -= DT; n++; }
+      while (acc >= DT && n < 12) { for (const a of ses.ais) a.update(); if (ses.auto) ses.helper.update(); game.step(); acc -= DT; n++; }
       if (acc > DT) acc = 0;
     }
     ses.ui.update(dt, ses.paused);
@@ -175,6 +182,15 @@ function start() {
   ses.raf = requestAnimationFrame(loop);
 }
 
+/** switch the build assistant on or off (Easy and Medium only) */
+function setAuto(ses: Session, on: boolean, quiet = false) {
+  const ok = ses.game.teams.some(t => t.ai && t.level <= 1);
+  ses.auto = on && ok;
+  const b = $('btnAuto'); b.classList.toggle('hidden', !ok); b.classList.toggle('on', ses.auto); b.textContent = 'Auto-build ' + (ses.auto ? 'ON' : 'off');
+  if (!quiet && ses.ui) ses.ui.toast(ses.auto ? 'Auto-build on: idle builders follow the opening orders; research and engineers are queued for you' : 'Auto-build off: construction is yours');
+}
+$('btnAuto').onclick = () => { if (S) { setAuto(S, !S.auto); ($('btnAuto') as HTMLElement).blur(); } };
+
 /** the opening-orders card: pauses the battle until it is dismissed */
 function showGuide(ses: Session) {
   const side = ses.me.fac;
@@ -182,6 +198,7 @@ function showGuide(ses: Session) {
   $('guideSide').innerHTML = side
     ? '<b>Russia:</b> you start with tanks and infantry already forward. Use them to screen your base and scout the Irpin bridges, but do not throw them away before your factories are running. Every crossing is a chokepoint: bring artillery before you force one.'
     : '<b>Ukraine:</b> their armoured column comes down the roads from the north-west within minutes. Keep your Javelin teams between it and your base, add an MG bunker on that side early, and remember your aid income lasts only while the city’s civilians do.';
+  $('guideAuto').textContent = ses.auto ? 'Auto-build is ON: your idle builders will follow this order by themselves, and research and engineers are queued for you. You raise and command the army. Switch it off any time with the Auto-build button at the top.' : $('btnAuto').classList.contains('hidden') ? '' : 'Want it done for you while you learn? Press the Auto-build button at the top.';
   ses.paused = true; $('guide').classList.remove('hidden'); $('pause').classList.add('hidden');
 }
 $('btnGuide').onclick = () => {

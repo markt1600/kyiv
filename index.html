@@ -31,6 +31,7 @@
       <div id="civ" title="Civilians alive in the city. Ukraine receives aid while they live; whoever kills them loses supply income."></div>
       <div id="wind" title="Wind strength"></div>
       <div id="clock"></div>
+      <button id="btnAuto" class="hidden" title="Let the build assistant run construction, engineers and research in the recommended order">Auto-build off</button>
       <div id="speed"><button id="spdDown">−</button><span id="spdVal">1×</span><button id="spdUp">+</button></div>
       <button id="btnPause">Menu</button>
     </div>
@@ -83,6 +84,8 @@
       <div class="opt"><label>Difficulty</label><div class="seg" id="optDiff"></div></div>
       <div class="opt"><label>Map size</label><div class="seg" id="optSize"></div></div>
       <div class="opt"><label>Start</label><div class="seg" id="optDate"></div></div>
+      <div class="opt" id="optAutoRow"><label>Auto-build</label><div class="seg" id="optAuto"></div></div>
+      <div class="optnote" id="optAutoNote"></div>
       <div class="opt"><label>Graphics</label><div class="seg" id="optGfx"></div></div>
       <button id="btnStart">Begin the battle</button>
       <details><summary>How to play</summary>
@@ -104,7 +107,7 @@
             <li>Pick a building once and <b>keep clicking to queue as many as you want</b> (drag for a row; right-click or Esc when done); hold <b>Shift</b> to drop the queue and build this now · <b>Shift</b> also queues move and attack orders</li>
             <li><b>A</b> attack (a unit, or move-and-fight to a place) · <b>B</b> fire at an area · <b>P</b> patrol · <b>G</b> guard · <b>R</b> repair · <b>E</b> salvage · <b>S</b> stop · <b>Del</b> scuttle</li>
             <li><b>Arrow keys / screen edge / middle-drag</b> pan · <b>wheel</b> zoom · <b>Z / X</b> or <b>Alt+middle-drag</b> rotate · <b>H</b> find command post · <b>V</b> supply ranges · <b>T</b> thermal drone view · <b>F</b> first-person view of the selected unit · <b>Tab</b> idle builder</li>
-            <li><b>Space / Esc</b> pause · <b>+ / −</b> game speed</li>
+            <li><b>Space / Esc</b> pause · <b>+ / −</b> game speed (up to 5×)</li>
           </ul>
         </div>
       </details>
@@ -124,6 +127,7 @@
       <li><b>Motor Pool</b> for tanks and artillery, then a <b>Field Repair Depot</b> and an anti-aircraft gun near your base.</li>
     </ol>
     <p class="g-tip" id="guideSide"></p>
+    <p class="g-tip" id="guideAuto"></p>
     <p class="g-tip">Placements queue up: pick a building once and click as many spots as you like. The command post is already selected.</p>
     <label class="g-chk"><input type="checkbox" id="guideHide"> Don’t show this again</label>
     <button id="btnGuide">Understood</button>
