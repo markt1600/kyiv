@@ -93,7 +93,7 @@ enemy structure; a guidance satellite cuts artillery dispersion by 60%.
 - **Click an enemy** with armed units selected to attack it (it highlights under the pointer; Alt-click inspects instead). When it is destroyed they fight on against nearby enemies
 - **Left-click / drag** select · **double-click** all of type · **Ctrl+1-9** / **1-9** groups
 - **Right-click** move / attack / assist / repair / salvage / set rally
-- Placing a building adds it to the end of the builders' queue (drag for a row); **Shift** drops the queue and builds it now. **Shift** also queues move and attack orders
+- Pick a building once, then click as many times as you like: each click adds one to the end of the builders' queue (drag for a row; right-click or Esc when done). **Shift** drops the queue and builds it now. **Shift** also queues move and attack orders
 - **A** attack a unit or attack-move to a place · **B** fire at an area (shell a treeline, burn out a block) · **P** patrol · **G** guard · **R** repair · **E** salvage · **S** stop · **Del** scuttle
 - The **roster** down the left edge lists every kind of unit you have with a count: click a tile to select all of that kind (Shift adds, a second click jumps the camera to them)
 - **V** supply ranges · **T** thermal drone view · **H** find command post · **Tab** idle builder
