@@ -62,6 +62,7 @@ Both sides field the same core roles under their own names and markings, plus ex
 | Airfield | Leleka-100 / Orlan-10, Bayraktar TB2 / Orion, Mi-24 / Ka-52, MiG-29 / Su-35S, Su-25 / Su-34 |
 | Drone Workshop | FPV kamikaze drone, Liutyi / Geran-2 long-range strike drone, Kizilelma / S-70 Okhotnik supersonic UCAV |
 | Armour Depot | Leopard 2A6 / T-90M, M2A2 Bradley / BMPT Terminator, HIMARS / Uragan |
+| Support | Field Repair Depot: repairs the command post and vehicles parked nearby when they are out of the fight |
 | Defences | MG bunker, M777 / Msta-B battery, ZU-23-2, radar, Patriot / S-400, EW station, Neptune / Iskander-K launcher |
 
 | Ukraine only | CAESAR truck howitzer, F-16 multirole fighter (Western Arms Packages); Sting interceptor drone (needs Electronic Warfare) |
@@ -92,7 +93,8 @@ enemy structure; a guidance satellite cuts artillery dispersion by 60%.
 - **Left-click / drag** select · **double-click** all of type · **Ctrl+1-9** / **1-9** groups
 - **Right-click** move / attack / assist / repair / salvage / set rally
 - **Shift** queue orders or place many buildings (drag for a row)
-- **A** attack-move · **P** patrol · **G** guard · **R** repair · **E** salvage · **S** stop · **Del** scuttle
+- **A** attack a unit or attack-move to a place · **B** fire at an area (shell a treeline, burn out a block) · **P** patrol · **G** guard · **R** repair · **E** salvage · **S** stop · **Del** scuttle
+- The **roster** down the left edge lists every kind of unit you have with a count: click a tile to select all of that kind (Shift adds, a second click jumps the camera to them)
 - **V** supply ranges · **T** thermal drone view · **H** find command post · **Tab** idle builder
 - **F** first-person view of the selected unit (drag to look, wheel to zoom, **Tab** next unit, **F** / **Esc** to return)
 - Arrows / screen edge / middle-drag pan · wheel zoom · **Z / X** rotate · **Space** pause · **+ / −** speed

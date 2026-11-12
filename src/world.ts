@@ -313,6 +313,7 @@ export class World {
     for (const b of map.bridges) {
       const m = new THREE.Mesh(bridgeGeo(b), bm); m.position.set(b.x, map.waterY + 3.4, b.z); m.rotation.y = b.ang; m.castShadow = quality >= 1; m.receiveShadow = true; m.visible = false; scene.add(m); this.bridges.push(m);
     }
+    this.buildProps(scene, map, quality);
     const im = (g: THREE.BufferGeometry, cap: number, mat: THREE.Material) => { const m = new THREE.InstancedMesh(g, mat, cap); m.count = 0; m.frustumCulled = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.setColorAt(0, _c.set(0xffffff)); scene.add(m); return m; };
     const cloth = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
     this.bodyIM = im(figure(true), 3000, cloth); this.bodyIM.receiveShadow = true;
@@ -326,6 +327,54 @@ export class World {
     this.bloodIM.renderOrder = 3;
   }
 
+  /** street furniture: parked and burnt-out cars, lamp posts along the avenues, anti-tank hedgehogs at the crossings */
+  private buildProps(scene: THREE.Scene, map: GameMap, quality: number) {
+    const r = mulberry32(map.seed * 7 + 3), n = map.n, mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.25, envMapIntensity: 0.9 });
+    const tr = new THREE.Matrix4(), q = new THREE.Quaternion(), ps = new THREE.Vector3(), sc = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
+    const mk = (parts: THREE.BufferGeometry[], spots: number[][], cols: number[], shadow: boolean) => {
+      if (!spots.length) return;
+      const g = mergeGeometries(parts); g.deleteAttribute('uv');
+      const m = new THREE.InstancedMesh(g, mat, spots.length); m.frustumCulled = false; m.castShadow = shadow && quality >= 1; m.receiveShadow = true;
+      const cells = new Int32Array(spots.length), base: THREE.Color[] = [];
+      spots.forEach((s, i) => {
+        q.setFromAxisAngle(up, s[2]); ps.set(s[0], map.heightAt(s[0], s[1]) - 0.05, s[1]); sc.setScalar(s[3] || 1); tr.compose(ps, q, sc); m.setMatrixAt(i, tr);
+        cells[i] = map.cellOf(s[0], s[1]); base.push(new THREE.Color(cols[Math.floor(r() * cols.length)])); m.setColorAt(i, _c.setScalar(0));
+      });
+      scene.add(m); this.props.push({ m, cells, base });
+    };
+    const free = (x: number, z: number) => x > 8 && z > 8 && x < map.size - 8 && z < map.size - 8 && map.passAt(x, z) && !map.road[map.cellOf(x, z)];
+    // cars: body, glasshouse, wheels. 1 in 5 is a burnt shell
+    const W = (x: number, z: number) => { const g = new THREE.CylinderGeometry(0.62, 0.62, 0.5, 10); g.rotateZ(Math.PI / 2); g.translate(x, 0.62, z); return paint(g, 0x0c0c0c, 1, false, 0); };
+    const car = [bx(3.2, 1.25, 7.4, 0, 0.55, 0, 0xffffff, false, 1), bx(2.9, 1.1, 3.9, 0, 1.75, -0.4, 0x30383e, false, 1), bx(2.7, 0.14, 3.6, 0, 2.85, -0.4, 0xffffff, false, 0.9),
+      bx(3.0, 0.3, 0.3, 0, 0.6, 3.75, 0x1a1a1a), bx(3.0, 0.3, 0.3, 0, 0.6, -3.75, 0x1a1a1a), bx(0.7, 0.3, 0.1, -1.1, 1.3, 3.72, 0xd8d4c0), bx(0.7, 0.3, 0.1, 1.1, 1.3, 3.72, 0xd8d4c0), bx(0.7, 0.3, 0.1, -1.1, 1.3, -3.72, 0x7a1810), bx(0.7, 0.3, 0.1, 1.1, 1.3, -3.72, 0x7a1810),
+      W(-1.55, 2.3), W(1.55, 2.3), W(-1.55, -2.4), W(1.55, -2.4)];
+    const cars: number[][] = [], lamps: number[][] = [], hogs: number[][] = [];
+    for (const pts of map.roads) {
+      let acc = 0, side = 1;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const ax = pts[i][0], az = pts[i][1], dx = pts[i + 1][0] - ax, dz = pts[i + 1][1] - az, l = Math.hypot(dx, dz) || 1, ux = dx / l, uz = dz / l;
+        for (let t = 0; t < l; t += 6) {
+          acc += 6; const x = ax + ux * t, z = az + uz * t, urb = map.urban[map.cellOf(x, z)];
+          if (acc % 36 < 6 && urb > 0.2) { side = -side; const lx = x - uz * side * 6.4, lz = z + ux * side * 6.4; if (map.passAt(lx, lz)) lamps.push([lx, lz, Math.atan2(-ux * side, uz * side) + Math.PI / 2, 1]); }
+          if (urb > 0.25 && r() < 0.05 * urb + 0.012) { const sd = r() < 0.5 ? 1 : -1, cx = x - uz * sd * 7.6, cz = z + ux * sd * 7.6; if (free(cx, cz)) cars.push([cx, cz, Math.atan2(ux, uz) + (r() < 0.5 ? Math.PI : 0) + (r() - 0.5) * 0.25, 1]); }
+        }
+      }
+    }
+    for (const c of map.civ) if (c.kind === 1 || c.kind === 2 || c.kind === 3) for (let k = 0; k < 2; k++) if (r() < 0.6) { const a = r() * 6.283, d = Math.max(c.fw, c.fh) * 4 + 6 + r() * 5, x = c.x + Math.cos(a) * d, z = c.z + Math.sin(a) * d; if (free(x, z)) cars.push([x, z, r() * 6.283, 1]); }
+    mk(car, cars, [0xb8bcc0, 0x8c1c18, 0x1f3a66, 0xe6e4dc, 0x3a3d40, 0x6a6f58, 0xc9b27a, 0x141414, 0x141414], true);
+    // lamp posts
+    mk([cyl(0.16, 0.24, 11, 0, 0, 0, 0x6c7074, 6), bx(3.2, 0.2, 0.24, 1.5, 10.8, 0, 0x6c7074), bx(1.2, 0.26, 0.5, 2.8, 10.6, 0, 0xcfd2d0), cyl(0.4, 0.5, 0.5, 0, 0, 0, 0x5a5d60, 6)], lamps, [0xffffff, 0xd8d8d8], false);
+    // hedgehogs: three steel beams welded crosswise, laid in rows across the roads into the city
+    const beam = (rx: number, rz: number) => { const g = new THREE.BoxGeometry(0.4, 4.6, 0.4); g.rotateX(rx); g.rotateZ(rz); g.translate(0, 1.5, 0); return paint(g, 0x5a4034, 1, false, 0.12); };
+    for (const b of map.bridges) for (const sd of [-1, 1]) { const nx = -b.t[1], nz = b.t[0], cx = b.x + nx * sd * (b.len / 2 + 22), cz = b.z + nz * sd * (b.len / 2 + 22); for (let k = -3; k <= 3; k++) if (k !== 0 && r() < 0.85) { const x = cx + b.t[0] * k * 6.5 + (r() - 0.5) * 3, z = cz + b.t[1] * k * 6.5 + (r() - 0.5) * 3; if (map.passAt(x, z)) hogs.push([x, z, r() * 6.283, 0.9 + r() * 0.3]); } }
+    const s0 = map.starts[0];
+    for (let k = 0; k < 40; k++) { const a = k / 40 * 6.283, x = s0.x + Math.cos(a) * 132 + (r() - 0.5) * 8, z = s0.z + Math.sin(a) * 132 + (r() - 0.5) * 8; if (r() < 0.6 && free(x, z)) hogs.push([x, z, r() * 6.283, 0.9 + r() * 0.3]); }
+    mk([beam(0.95, 0), beam(-0.5, 0.85), beam(-0.5, -0.85)], hogs, [0xffffff, 0xd0b8a8, 0xb89a88], true);
+  }
+  private lastReveal = 0;
+  private props: { m: THREE.InstancedMesh; cells: Int32Array; base: THREE.Color[] }[] = [];
+  /** raised in first person so the unexplored distance is dim rather than invisible */
+  reveal = 0;
   /** a bridge has been brought down */
   dropBridge(i: number) { const m = this.bridges[i]; if (!m) return; m.geometry.dispose(); m.geometry = bridgeGeo(this.map.bridges[i]); }
   /** a building's damage level has changed: rebuild it holed, half-collapsed, or as rubble */
@@ -337,12 +386,14 @@ export class World {
   update(game: Game, me: Team, dt: number, T: number, night: number, paused: boolean) {
     const map = this.map, vis = me.vis;
     this.uSnow.value = game.snow; this.mat.emissiveIntensity = night * 1.5;
+    if (this.reveal !== this.lastReveal) { this.lastReveal = this.reveal; this.t = 0; }
     this.t -= dt;
     if (this.t <= 0) {
       this.t = 0.4;
       map.bridges.forEach((b, i) => { const k = b.dead ? 'd' : b.pontoon ? 'p' : 'o'; if (this.bkey[i] !== undefined && this.bkey[i] !== k) this.dropBridge(i); this.bkey[i] = k; });
       map.bridges.forEach((b, i) => { if (!this.bridges[i].visible && (vis[map.cellOf(b.x, b.z)] & 1)) this.bridges[i].visible = true; });
-      for (const c of map.civ) { const m = this.meshes[c.id]; if (m && !m.visible && (vis[map.cellOf(c.x, c.z)] & 1)) m.visible = true; }
+      for (const c of map.civ) { const m = this.meshes[c.id]; if (m && !m.visible && (this.reveal > 0 || vis[map.cellOf(c.x, c.z)] & 1)) m.visible = true; }
+      for (const p of this.props) { for (let i = 0; i < p.cells.length; i++) { const v = vis[p.cells[i]]; p.m.setColorAt(i, _c.copy(p.base[i]).multiplyScalar(Math.max(this.reveal, v & 2 ? 1 : v & 1 ? 0.45 : 0))); } if (p.m.instanceColor) p.m.instanceColor.needsUpdate = true; }
     }
     // the dead: fresh, then bloated and darkening, then collapsing into the ground, then bones
     let n = 0, nb = 0;

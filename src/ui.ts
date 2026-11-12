@@ -6,7 +6,7 @@ import { Renderer } from './render';
 import { Audio } from './audio';
 import { clamp, fmtTime } from './util';
 
-type Mode = null | 'fight' | 'patrol' | 'guard' | 'repair' | 'reclaim' | 'move';
+type Mode = null | 'fight' | 'patrol' | 'guard' | 'repair' | 'reclaim' | 'move' | 'bombard';
 const $ = (id: string) => document.getElementById(id)!;
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
 
@@ -226,6 +226,7 @@ export class UI {
       switch (k) {
         case 'a': this.setMode('fight'); break;
         case 'p': this.setMode('patrol'); break;
+        case 'b': this.setMode('bombard'); break;
         case 'g': this.setMode('guard'); break;
         case 'r': this.setMode('repair'); break;
         case 'e': this.setMode('reclaim'); break;
@@ -264,7 +265,8 @@ export class UI {
     this.on(this.mm, 'mousedown', (e: MouseEvent) => {
       const p = mmv(e);
       if (e.button === 0) {
-        if (this.mode && this.mode !== 'guard' && this.mode !== 'repair' && this.mode !== 'reclaim') { this.game.moveGroup(this.mine(), p.x, p.z, this.mode as any, e.shiftKey); this.mode = null; this.panelKey = ''; }
+        if (this.mode === 'bombard') { this.bombard(p.x, p.z, e.shiftKey); this.mode = null; this.panelKey = ''; }
+        else if (this.mode && this.mode !== 'guard' && this.mode !== 'repair' && this.mode !== 'reclaim') { this.game.moveGroup(this.mine(), p.x, p.z, this.mode as any, e.shiftKey); this.mode = null; this.panelKey = ''; }
         else { mmDown = true; this.r.cam.x = p.x; this.r.cam.z = p.z; }
       } else if (e.button === 2) this.groundOrder(p.x, p.z, e.shiftKey);
     });
@@ -294,6 +296,59 @@ export class UI {
     const us = this.game.units.filter(u => u.team === this.me && !u.dead && u.built && !u.inFactory && u.def.cls === cur.def.cls && u.def.cls !== 'building' || u === cur);
     const i = us.indexOf(cur), n = us[(i + dir + us.length) % us.length];
     if (n && n !== cur) { this.select([n], false); this.r.setFP(n); }
+  }
+  /** order every selected unit that can to fire on a patch of ground */
+  private bombard(x: number, z: number, queue: boolean) {
+    const us = this.mine().filter(u => !u.def.kami && u.def.weapons.some(w => (w.tg & 1) && w.k !== 'ram' && !w.bld));
+    if (!us.length) { this.toast('Nothing selected can fire on an area'); this.audio.ui('error'); return; }
+    const sp = Math.min(18, 4 + us.length * 1.5);
+    us.forEach((u, i) => { const a = i * 2.4, r = us.length > 1 ? sp * Math.sqrt((i + 0.5) / us.length) : 0; this.game.give(u, { type: 'bombard', x: x + Math.cos(a) * r, z: z + Math.sin(a) * r }, queue); });
+  }
+  /** what the pointer is over while a targeting order is armed: the unit that would be hit / guarded / repaired, or the patch of ground */
+  private hover(): { u: Unit | null; x: number; z: number; r: number; col: string; dash: boolean } | null {
+    const m = this.mode; if (!m || m === 'move' || m === 'patrol' || !this.inside || this.r.fp || (this.mobile && !this.tch)) return null;
+    const me = this.me, sel = this.selected;
+    let u: Unit | null = null, col = '#ff5a40', r = 10, dash = false;
+    if (m === 'fight') { u = this.unitAt(this.mx, this.my, o => o.team.ally !== me.ally); dash = true; r = 12; }
+    else if (m === 'guard') { u = this.unitAt(this.mx, this.my, o => o.team.ally === me.ally && !sel.has(o)); col = '#ffe060'; if (!u) return null; }
+    else if (m === 'repair') { u = this.unitAt(this.mx, this.my, o => o.team.ally === me.ally && !sel.has(o) && (!o.built || o.hp < o.def.hp)); col = '#6fe08a'; if (!u) return null; }
+    else if (m === 'reclaim') { col = '#c0d0e0'; r = 70; dash = true; }
+    else if (m === 'bombard') { r = 8; for (const s of this.mine()) for (const w of s.def.weapons) if ((w.tg & 1) && w.splash) r = Math.max(r, w.splash); r += Math.min(18, 4 + sel.size * 1.5); }
+    if (u) return { u, x: u.x, z: u.z, r: u.def.r, col, dash: false };
+    const p = this.r.pick(this.mx, this.my); if (!p) return null;
+    return { u: null, x: p.x, z: p.z, r, col, dash };
+  }
+  private drawHover(ctx: CanvasRenderingContext2D) {
+    const h = this.hover(); if (!h) return;
+    const r = this.r, p = this.tmp, map = this.game.map, pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.008);
+    ctx.save(); ctx.strokeStyle = h.col; ctx.fillStyle = h.col; ctx.lineJoin = 'round';
+    if (h.u) { // a unit: light it up with a filled halo, corner brackets and its name
+      const u = h.u, d = u.def, cam = r.camera, f = innerHeight / (2 * Math.tan(cam.fov * Math.PI / 360));
+      r.project(u.x, u.y + d.h * 0.45, u.z, p); if (!p.ok) { ctx.restore(); return; }
+      const dist = cam.position.distanceTo({ x: u.x, y: u.y, z: u.z } as any), R = Math.max(16, d.r * f / dist * 1.35) + pulse * 3, cx = p.x, cy = p.y, k = R * 0.45;
+      ctx.globalAlpha = 0.16 + 0.1 * pulse; ctx.beginPath(); ctx.arc(cx, cy, R, 0, 6.283); ctx.fill();
+      ctx.globalAlpha = 1; ctx.lineWidth = 2.5; ctx.shadowColor = h.col; ctx.shadowBlur = 8; ctx.beginPath();
+      for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { ctx.moveTo(cx + sx * R, cy + sy * (R - k)); ctx.lineTo(cx + sx * R, cy + sy * R); ctx.lineTo(cx + sx * (R - k), cy + sy * R); }
+      ctx.stroke(); ctx.shadowBlur = 0;
+      const label = (d.neutral ? map.bridges[u.cx].name : nm(d, u.team.fac)) + (this.mode === 'fight' ? '  ' + Math.ceil(u.hp / d.hp * 100) + '%' : '');
+      ctx.font = '600 12px system-ui, sans-serif'; ctx.textAlign = 'center'; const tw = ctx.measureText(label).width;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(cx - tw / 2 - 6, cy - R - 24, tw + 12, 18); ctx.fillStyle = h.col; ctx.fillText(label, cx, cy - R - 11);
+    } else { // open ground: a reticle lying on the terrain, sized to what the order will cover
+      const N = 40; ctx.lineWidth = 2; ctx.shadowColor = h.col; ctx.shadowBlur = 6; if (h.dash) ctx.setLineDash([7, 6]);
+      const ring = (rad: number) => { ctx.beginPath(); let first = true; for (let i = 0; i <= N; i++) { const a = i / N * 6.283, x = h.x + Math.cos(a) * rad, z = h.z + Math.sin(a) * rad; r.project(x, map.groundY(x, z) + 0.4, z, p); if (!p.ok) { first = true; continue; } if (first) { ctx.moveTo(p.x, p.y); first = false; } else ctx.lineTo(p.x, p.y); } ctx.stroke(); };
+      ring(h.r * (1 + 0.04 * pulse));
+      ctx.setLineDash([]);
+      if (this.mode !== 'reclaim') {
+        ctx.globalAlpha = 0.5; ring(h.r * 0.45); ctx.globalAlpha = 1; ctx.beginPath();
+        for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const [k0, k1] of [[0.18, 0.4], [0.75, 1.25]]) {
+          r.project(h.x + ax * h.r * k0, map.groundY(h.x + ax * h.r * k0, h.z + az * h.r * k0) + 0.4, h.z + az * h.r * k0, p); if (!p.ok) continue; const x0 = p.x, y0 = p.y;
+          r.project(h.x + ax * h.r * k1, map.groundY(h.x + ax * h.r * k1, h.z + az * h.r * k1) + 0.4, h.z + az * h.r * k1, p); if (!p.ok) continue; ctx.moveTo(x0, y0); ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+        r.project(h.x, map.groundY(h.x, h.z) + 0.4, h.z, p); if (p.ok) { ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, 6.283); ctx.fill(); }
+      }
+    }
+    ctx.restore();
   }
   private setMode(m: Mode) {
     if (!this.mine().length) return;
@@ -437,7 +492,8 @@ export class UI {
   private modeClick(e: { clientX: number; clientY: number; shiftKey: boolean }) {
     const us = this.mine(), g = this.game, m = this.mode, shift = e.shiftKey;
     const p = this.r.pick(e.clientX, e.clientY);
-    if (m === 'fight' || m === 'patrol' || m === 'move') {
+    if (m === 'bombard') { if (p) { this.bombard(p.x, p.z, shift); this.pings.push({ x: p.x, z: p.z, t: 0.8, c: '#ff5040' }); } }
+    else if (m === 'fight' || m === 'patrol' || m === 'move') {
       const hit = m === 'fight' ? this.unitAt(e.clientX, e.clientY, u => u.team.ally !== this.me.ally) : null;
       if (hit) for (const u of us) { if (u.def.weapons.length) g.give(u, { type: 'attack', target: hit, x: hit.x, z: hit.z }, shift); }
       else if (p) g.moveGroup(us, p.x, p.z, m, shift);
@@ -662,6 +718,7 @@ export class UI {
       const c = r.cam; ctx.fillText(`WHOT  FOV ${(c.dist / 12).toFixed(0)}  ALT ${(c.dist * Math.sin(c.pitch) * 3).toFixed(0)} m  HDG ${(((-c.yaw * 57.3) % 360 + 360) % 360).toFixed(0).padStart(3, '0')}`, 80, 96);
       ctx.fillText(`50.${(4500 - c.z * 0.4).toFixed(0)}N 030.${(5200 + c.x * 0.4).toFixed(0)}E   ${g.date.toISOString().slice(0, 10)}  REC ●`, 80, 114);
     }
+    this.drawHover(ctx);
     const d = this.drag;
     if (d && d.on) {
       ctx.strokeStyle = '#60ff90'; ctx.fillStyle = 'rgba(96,255,144,0.1)'; ctx.lineWidth = 1;
@@ -689,8 +746,46 @@ export class UI {
     cv.className = me.condemn ? 'bad' : '';
     $('wind').textContent = 'Wind ' + Math.round(g.wind * 100) + '%' + (me.sat ? ' · SAT' + (me.sat & 2 ? '+GPS' : '') : '');
     $('modeHint').textContent = this.placing && this.mobile ? (this.placing.span ? 'Tap a destroyed bridge: ' : this.placing.reuse ? 'Tap a building to requisition: ' : 'Drag to position, release to build: ') + nm(this.placing, me.fac) : this.placing ? (this.placing.span ? 'Click a destroyed bridge to lay a ' : this.placing.reuse ? 'Requisition a building for ' : 'Place ') + nm(this.placing, me.fac) + ' — Shift: multiple · drag: row · right-click: cancel'
-      : this.mode ? ({ fight: 'Attack-move', patrol: 'Patrol', guard: 'Guard', repair: 'Repair', reclaim: 'Salvage area', move: 'Move' } as any)[this.mode] + (this.mobile ? ' — tap target' : ' — click target') : '';
+      : this.mode ? ({ fight: 'Attack', patrol: 'Patrol', guard: 'Guard', repair: 'Repair', reclaim: 'Salvage area', move: 'Move', bombard: 'Fire at area' } as any)[this.mode] + (this.mobile ? ' — tap target' : ' — click target') : '';
     this.refreshPanel();
+    this.refreshRoster();
+  }
+
+  /** the roster down the side of the screen: one tile per kind of unit you have, with how many. Click to select them all. */
+  private rosterKey = '';
+  private refreshRoster() {
+    const box = $('roster'), me = this.me, by = new Map<UnitDef, number>(), sel = new Set<UnitDef>();
+    let army = 0;
+    for (const u of this.game.units) {
+      if (u.team !== me || u.dead || !u.built || u.inFactory || u.def.cls === 'building' || u.def.id === 'cruise' || u.def.id === 'hyper') continue;
+      by.set(u.def, (by.get(u.def) || 0) + 1); if (u.def.weapons.length && !u.def.bp) army++;
+    }
+    for (const u of this.selected) if (u.team === me) sel.add(u.def);
+    // soldiers first, then vehicles, then aircraft; within each, in the order they appear in the build menus
+    const rank = (d: UnitDef) => (d.commander ? 0 : d.inf ? 1 : d.cls === 'ground' ? 2 : 3) * 1000 + Object.keys(DEFS).indexOf(d.id);
+    const defs = [...by.keys()].sort((a, b) => rank(a) - rank(b));
+    const key = defs.map(d => d.id).join(',');
+    if (key !== this.rosterKey) {
+      this.rosterKey = key; box.innerHTML = '';
+      const tile = (id: string, img: string, title: string, fn: (add: boolean) => void) => {
+        const b = document.createElement('div'); b.className = 'rtile'; b.dataset.id = id; b.title = title;
+        b.innerHTML = (img ? `<img src="${img}" draggable="false">` : '<span class="rall">ALL</span>') + '<span class="rn"></span>';
+        b.onmousedown = e => { e.preventDefault(); e.stopPropagation(); this.audio.init(); fn(e.shiftKey); this.audio.ui('click'); };
+        box.appendChild(b);
+      };
+      if (defs.length) tile('*', '', 'Every combat unit', add => this.select(this.game.units.filter(u => u.team === me && !u.dead && u.built && !u.inFactory && u.def.cls !== 'building' && u.def.weapons.length > 0 && !u.def.bp && !u.def.kami), add));
+      for (const d of defs) tile(d.id, this.icons[d.id] || '', nm(d, me.fac), add => {
+        const us = this.game.units.filter(u => u.team === me && u.def === d && !u.dead && u.built && !u.inFactory);
+        // a second click on a type that is already the whole selection jumps the camera to them
+        if (!add && us.length && this.selected.size === us.length && us.every(u => this.selected.has(u))) { let x = 0, z = 0; for (const u of us) { x += u.x; z += u.z; } this.r.cam.x = x / us.length; this.r.cam.z = z / us.length; }
+        this.select(us, add);
+      });
+    }
+    for (const el of Array.from(box.children) as HTMLElement[]) {
+      const id = el.dataset.id!, d = DEFS[id], n = id === '*' ? army : by.get(d) || 0;
+      (el.querySelector('.rn') as HTMLElement).textContent = '' + n;
+      el.classList.toggle('on', id !== '*' && sel.has(d));
+    }
   }
 
   private refreshPanel() {
@@ -712,6 +807,7 @@ export class UI {
         if (mob) {
           ob('Move', 'M', this.mode === 'move', () => this.setMode('move')); ob('Attack', 'A', this.mode === 'fight', () => this.setMode('fight'));
           ob('Patrol', 'P', this.mode === 'patrol', () => this.setMode('patrol')); ob('Guard', 'G', this.mode === 'guard', () => this.setMode('guard'));
+          if (mine.some(u => !u.def.kami && u.def.weapons.some(w => (w.tg & 1) && w.k !== 'ram' && !w.bld))) ob('Bombard', 'B', this.mode === 'bombard', () => this.setMode('bombard'));
           if (hasBp) { ob('Repair', 'R', this.mode === 'repair', () => this.setMode('repair')); ob('SalvagE', 'E', this.mode === 'reclaim', () => this.setMode('reclaim')); }
         }
         if (mine.length === 1 && mine[0].built && !mine[0].inFactory) ob('First person', 'F', !!this.r.fp, () => this.toggleFP());
@@ -782,6 +878,7 @@ export class UI {
       if (d.extract && u.spot) st += `<span>Supplies <b>+${(u.spot.rich * d.extract).toFixed(1)}</b></span>`;
       if (d.conv) st += `<span>Converts <b>${d.conv} power → 1 supply</b></span>`;
       if (d.jam) st += `<span>Jamming radius <b>${d.jam}</b></span>`;
+      if (d.heal) st += `<span>Repairs within <b>${d.heal}</b></span>` + (u.nanoTick >= this.game.tick - 2 && u.nano && (u.nano as any).def ? `<span>Working on <b>${nm((u.nano as Unit).def, fac)}</b></span>` : '');
       if (d.kami) st += `<span>Warhead <b>${d.kami.d}</b></span>`;
       if (u.team === this.me && d.lab) st += u.resQ.length ? `<span>${d.lab === 'pad' ? 'Countdown' : 'Researching'} <b>${u.resQ[0].name} ${Math.floor(u.resP * 100)}%</b></span>` : '<span><b>Idle — choose a programme</b></span>';
       if (u.team === this.me && d.cls === 'ground') { const mob = this.game.mobility(u); if (this.game.freezing(u)) st += '<span style="color:#9fd4ff"><b>Out of supply — freezing</b></span>'; else if (mob < 0.95) st += `<span>Going <b>${Math.round(mob * 100)}%</b></span>`; }

@@ -47,6 +47,8 @@ export interface UnitDef {
   jam: number;
   /** requisition: civilian building kinds this can be set up in (it sits on the roof instead of being built) */
   reuse: number[] | null;
+  /** repair depot: radius within which it patches up friendly vehicles and the command post */
+  heal: number;
   /** faction that fields this (-1 both, 0 Ukraine, 1 Russia) */
   fac: number;
   /** built across a destroyed bridge to reopen the crossing */
@@ -138,7 +140,7 @@ const base = {
   tier: 1, speed: 0, turn: 0, r: 4, h: 5, fw: 1, fh: 1, sight: 150, radar: 0, bp: 0, buildRange: 42,
   builds: [] as string[], factory: false, mkM: 0, mkE: 0, useE: 0, stM: 0, stE: 0, extract: 0, wind: 0, conv: 0,
   weapons: [] as WeaponDef[], alt: 0, hover: false, blast: null, commander: false, bot: false, noChase: false, naval: false, water: false,
-  inf: false, req: '', lab: '' as const, kami: null, ew: 0, jam: 0, wheel: false, reuse: null, neutral: false, span: false, fac: -1,
+  inf: false, req: '', lab: '' as const, kami: null, ew: 0, jam: 0, wheel: false, reuse: null, neutral: false, span: false, fac: -1, heal: 0,
 };
 export const DEFS: Record<string, UnitDef> = {};
 export const DEF_LIST: UnitDef[] = [];
@@ -150,8 +152,8 @@ function U(d: Partial<UnitDef> & { id: string; name: string; desc: string; cls: 
 /** faction-specific display name (0 Ukraine, 1 Russia) */
 export const nm = (d: UnitDef, fac: number) => (d.names ? d.names[fac] : d.name);
 
-const HQ_BUILD = ['depot', 'gen', 'wind', 'estore', 'mstore', 'barracks', 'motorpool', 'airfield', 'lab', 'bunker', 'aagun', 'radar', 'c_camp', 'c_drone', 'c_post'];
-const ENG_BUILD = ['depot', 'railhub', 'gen', 'wind', 'plant', 'estore', 'mstore', 'converter', 'barracks', 'motorpool', 'airfield', 'dronehub', 'heavy', 'lab',
+const HQ_BUILD = ['depot', 'gen', 'wind', 'estore', 'mstore', 'barracks', 'motorpool', 'airfield', 'lab', 'workshop', 'bunker', 'aagun', 'radar', 'c_camp', 'c_drone', 'c_post'];
+const ENG_BUILD = ['depot', 'railhub', 'gen', 'wind', 'plant', 'estore', 'mstore', 'converter', 'barracks', 'motorpool', 'airfield', 'dronehub', 'heavy', 'lab', 'workshop',
   'bunker', 'howitzer', 'aagun', 'sam', 'radar', 'ew', 'strike', 'pad', 'pontoon', 'c_camp', 'c_drone', 'c_post'];
 
 // tracer / shell tints
@@ -318,6 +320,17 @@ U({
       B(6, 4, 8, 7.4, 2.6, 4.6, 'M'), B(6.2, 0.4, 8.2, 7.4, 4.8, 4.6, 'D'), C(0.2, 0.3, 3, 5.6, 11.4, -5.6, 'L'),
       C(1.6, 0.3, 0.9, 0, 0.3, 0, 'W', 's', [0.9, 0, 0]), C(0.1, 0.1, 1.2, 0, 0.3, 0.6, 'K', 's', [0.9, 0, 0]),
       S(1.6, -6, 11.2, -5, 'W'), B(4, 0.2, 4, -2, 0.75, 7.6, 'W'), B(0.12, 1.4, 2.2, -9.46, 7.8, -2.6, 'G')],
+  },
+});
+
+U({
+  id: 'workshop', name: 'Repair Depot', names: ['Field Repair Depot', 'Field Repair Depot'], desc: 'Mechanics patch up the command post and any vehicle parked nearby, as long as it is not under fire. Uses power.', cls: 'building',
+  hp: 1400, m: 260, e: 2400, work: 950, fw: 2, fh: 2, h: 8, sight: 110, useE: 12, heal: 95,
+  model: {
+    sp: [4.4, 8.2, -3.4], sa: 'y', ss: 0.4,
+    parts: [...pad(15, 15), B(9, 4.6, 12, -2.6, 2.9, 0, 'M'), B(5.2, 0.4, 12.4, -5, 5.6, 0, 'D', undefined, [0, 0, 0.3]), B(5.2, 0.4, 12.4, -0.2, 5.6, 0, 'D', undefined, [0, 0, -0.3]),
+      B(6, 3.6, 0.2, -2.6, 2.4, 6.05, 'K'), C(0.3, 0.4, 7.6, 4.4, 4.4, -3.4, 'Y'), B(0.4, 0.4, 6, 0, 0, 2.2, 'Y', 's'), B(0.1, 2.4, 0.1, 0, -1.2, 4.6, 'K', 's'), B(0.6, 0.5, 0.6, 0, -2.5, 4.6, 'D', 's'),
+      C(1.1, 1.1, 0.7, 4.6, 1.3, 3, 'K', undefined, [0, 0, H]), C(1.1, 1.1, 0.7, 5.5, 1.3, 3.4, 'K', undefined, [0.3, 0, H]), B(2, 1.2, 2, 5, 1.2, -0.2, 'O'), B(1.6, 1, 1.2, 3.4, 1.1, 5.4, 'R'), TZ(0.7, 3, 5.6, 1.3, -5.6, 'L')],
   },
 });
 

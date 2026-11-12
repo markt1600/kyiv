@@ -6,7 +6,7 @@ import { angDiff, clamp, lerp, mulberry32, Rng, turnToward } from './util';
 export const TICK = 30;
 export const DT = 1 / TICK;
 
-export type OType = 'move' | 'attack' | 'fight' | 'patrol' | 'build' | 'repair' | 'reclaim' | 'guard' | 'dive';
+export type OType = 'move' | 'attack' | 'fight' | 'patrol' | 'build' | 'repair' | 'reclaim' | 'guard' | 'dive' | 'bombard';
 export interface Order {
   type: OType; x: number; z: number;
   target?: Unit | null; wreck?: Wreck; def?: UnitDef; cx?: number; cz?: number; x2?: number; z2?: number;
@@ -85,6 +85,10 @@ export interface GameOpts { n: number; seed: number; biome?: number; wet?: numbe
 
 const GS = 32; // spatial hash cell
 const bit = (u: Unit) => (u.def.cls === 'air' ? 2 : 1);
+/** a patch of ground being fired on: stands in for a target unit so every weapon can be laid on a place rather than a thing */
+const MARK: UnitDef = { ...DEFS.bridge, id: 'mark', r: 0, h: 0 };
+/** how long a fire-at-area order is kept up once in range, in ticks */
+const BOMBARD_TICKS = 16 * 30;
 
 export class Game {
   map: GameMap; teams: Team[] = []; units: Unit[] = []; wrecks: Wreck[] = []; projs: Proj[] = [];
@@ -396,6 +400,7 @@ export class Game {
     this.windDir += Math.sin(t * 0.0021) * 0.0006;
     if (t % 30 === 0) { this.updateSeason(); this.updateSupply(); }
     if (t % 15 === 7) this.updateJammers();
+    if (t % 15 === 11) this.updateWorkshops();
     if (t % 3 === 0) this.updateCivilians();
     // economy pass
     for (const tm of this.teams) { tm.pM = tm.pE = tm.uE = tm.sM = tm.sE = 0; }
@@ -548,6 +553,18 @@ export class Game {
       this.events.push({ t: 'tech', x: u.x, y: u.y, z: u.z, team: tm, tech: t, u });
     }
   }
+  /** repair depots work on the most damaged vehicles (and the command post) within reach, two at a time, if they are out of the fight */
+  private updateWorkshops() {
+    for (const w of this.units) {
+      if (!w.def.heal || !w.built || w.dead || w.team.lowPower) continue;
+      const list = this.query(w.x, w.z, w.def.heal).slice().filter(o => !o.dead && o.built && o.team === w.team && o.def.cls === 'ground' && !o.def.inf && o.hp < o.def.hp && this.tick - o.lastHit > 4 * TICK && Math.hypot(o.x - w.x, o.z - w.z) < w.def.heal + o.def.r);
+      list.sort((a, b) => a.hp / a.def.hp - b.hp / b.def.hp);
+      for (let i = 0; i < Math.min(2, list.length); i++) {
+        const o = list[i]; o.hp = Math.min(o.def.hp, o.hp + Math.min(o.def.hp * 0.03, 70));
+        if (i === 0) { w.nano = o; w.nanoTick = this.tick + 14; }
+      }
+    }
+  }
   /** electronic warfare: drones inside an enemy jammer's bubble lose their link and fall out of the sky */
   private updateJammers() {
     for (const j of this.units) {
@@ -669,6 +686,20 @@ export class Game {
     }
     switch (o.type) {
       case 'dive': break;
+      case 'bombard': { // shell a place, not a unit: flush a treeline, burn out a block, deny a crossing
+        const w = d.weapons.find(x => (x.tg & 1) && x.k !== 'ram' && !x.bld);
+        if (!w || d.kami) { this.shift(u); break; }
+        let t = o.target;
+        if (!t) { t = o.target = new Unit(MARK, this.neutral); t.x = t.px = o.x; t.z = t.pz = o.z; t.y = t.py = this.map.groundY(o.x, o.z); t.hp = 1e12; }
+        u.forced = t;
+        const dd = Math.hypot(o.x - u.x, o.z - u.z);
+        if (d.cls === 'building') { if (dd > w.range || dd < (w.min || 0)) { this.shift(u); break; } }
+        else if (d.cls === 'air' && !d.hover) this.setGoal(u, o.x, o.z, 0);
+        else if (dd > w.range * 0.9) { this.chase(u, o.x, o.z, w.range * 0.75); break; }
+        else this.stop(u);
+        o.n = (o.n || 0) + 1; if (o.n > BOMBARD_TICKS) this.shift(u);
+        break;
+      }
       case 'move':
         if (!o.s) { o.s = true; this.setGoal(u, o.x, o.z, 5); }
         else if (!u.goal) this.shift(u);
@@ -958,9 +989,10 @@ export class Game {
       const w = ws[i];
       if (u.cd[i] > 0) u.cd[i] -= DT;
       let t = u.wt[i];
-      if (t && (t.dead || t.inFactory || !this.inRange(u, t, w) || !(w.bld || this.canSee(u.team, t)))) t = null;
+      if (t && (t.dead || t.inFactory || !this.inRange(u, t, w) || !(w.bld || t.def === MARK || this.canSee(u.team, t)))) t = null;
+      if (t && t.def === MARK && t !== u.forced) t = null;
       const f = u.forced;
-      if (f && (w.tg & bit(f)) && this.inRange(u, f, w) && this.canSee(u.team, f)) t = f;
+      if (f && (w.tg & bit(f)) && this.inRange(u, f, w) && (f.def === MARK || this.canSee(u.team, f))) t = f;
       else if (!t && (this.tick + u.id + i * 3) % (w.bld ? 30 : 6) === 0) t = this.findEnemy(u, u.x, u.z, w.range, w.tg, w.min || 0, 0, 0, 1e9, !!w.bld);
       u.wt[i] = t;
       if (w.k === 'ram') continue;
@@ -996,6 +1028,7 @@ export class Game {
       case 'gun':
         this.events.push({ t: 'beam', x: mx, y: my, z: mz, tx: t.x + (this.rng() - 0.5) * t.def.r, ty, tz: t.z + (this.rng() - 0.5) * t.def.r, c: w.color, size: w.dmg });
         this.damage(t, w.dmg, u);
+        if (t.def === MARK && this.rng() < 0.06) this.igniteArea(t.x + (this.rng() - 0.5) * 14, t.z + (this.rng() - 0.5) * 14, 4, 0.35);
         break;
       case 'launch': {
         const m = this.spawn(DEFS[u.team.tech.has('t_heavy') ? 'hyper' : w.spawn!], u.team, u.x, u.z, true);

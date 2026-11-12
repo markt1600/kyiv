@@ -455,6 +455,12 @@ export class Renderer {
         // paved ground: cracked, patched concrete in the districts; asphalt roads with worn edge lines and centre dashes
         float rdist = texture2D(uRoad, vWxz/uSize).r * 31.875;
         float roadK = 1.0 - smoothstep(3.1, 3.6, rdist), hk = max(vMat, roadK);
+        // close to the eye a second, much finer layer comes in: individual blades and stones on soil, grit and hairline cracks on paving
+        float nearK = 1.0 - smoothstep(18.0, 120.0, length(vViewPosition));
+        if (nearK > 0.01) {
+          vec3 fo = texture2D(map, vWxz/3.3).rgb * texture2D(map, vWxz/0.9 + 0.37).rgb, fh = texture2D(uHard, vWxz/4.1).rgb * texture2D(uHard, vWxz/1.3 + 0.21).rgb;
+          diffuseColor.rgb *= mix(vec3(1.0), mix(0.4 + 2.3*fo, 0.35 + 2.6*fh, hk), nearK*0.85);
+        }
         vec3 hard = texture2D(uHard, vWxz/17.0).rgb;
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*(0.5 + 1.0*hard), vMat*0.75);
         vec3 asph = vec3(0.105, 0.108, 0.112)*(0.55 + 0.9*hard.r)*(0.85 + 0.3*n2);
@@ -486,7 +492,7 @@ export class Renderer {
     this.fogData = new Uint8Array(n * n * 4); this.fogCur = new Float32Array(n * n).fill(235);
     this.fogTex = new THREE.DataTexture(this.fogData as any, n, n, THREE.RGBAFormat);
     this.fogTex.magFilter = this.fogTex.minFilter = THREE.LinearFilter; this.fogTex.needsUpdate = true;
-    const fogMat = new THREE.MeshBasicMaterial({ color: bio.fogCol, alphaMap: this.fogTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8, fog: false });
+    const fogMat = this.fogMat = new THREE.MeshBasicMaterial({ color: bio.fogCol, alphaMap: this.fogTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8, fog: false });
     const fogMesh = new THREE.Mesh(tg, fogMat); fogMesh.renderOrder = 5; this.scene.add(fogMesh); this.noReflect.push(fogMesh, terrain, skirt);
 
     // ── water / lava ──
@@ -514,6 +520,20 @@ export class Renderer {
     }
 
     this.scenery = new Scenery(this.scene, map, Renderer.mobile ? 0 : quality, map.seed);
+    // a deck of broken cloud high above the top-down camera: only ever seen from below, at ground level
+    this.cloudU.uTex.value = cloud;
+    const cgeo = new THREE.PlaneGeometry(16000, 16000); cgeo.rotateX(Math.PI / 2);
+    this.clouds = new THREE.Mesh(cgeo, new THREE.ShaderMaterial({ uniforms: this.cloudU, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      vertexShader: 'varying vec2 vU; void main(){ vU = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position, 1.0); }',
+      fragmentShader: `uniform sampler2D uTex; uniform float uT, uCover; uniform vec3 uCol; varying vec2 vU;
+        void main(){ vec2 p = vU*5.0 + uT*vec2(0.004, 0.0025);
+          float n = texture2D(uTex, p).r*0.55 + texture2D(uTex, p*2.3 + 0.4).g*0.3 + texture2D(uTex, p*5.1).r*0.15;
+          float a = smoothstep(1.0 - uCover, 1.0 - uCover + 0.22, n) * (1.0 - smoothstep(0.2, 0.5, length(vU - 0.5)));
+          gl_FragColor = vec4(uCol*(0.7 + 0.45*n), a*0.92);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }` }));
+    this.clouds.renderOrder = -9; this.clouds.frustumCulled = false; this.scene.add(this.clouds); this.noReflect.push(this.clouds);
     this.world = new World(this.scene, map, quality);
     this.skyDay.set(bio.sky);
     // dynamic lights (fixed pool so shaders never recompile)
@@ -633,6 +653,9 @@ export class Renderer {
     su.mieCoefficient.value = 0.004 + 0.03 * overcast; su.mieDirectionalG.value = 0.84;
     this.skyK.value = lerp(0.26, 0.2, overcast) * (1 - night * 0.92); this.skyNight.value.setHex(0x0c1220).multiplyScalar(night);
     this.sky.position.copy(this.camera.position);
+    this.clouds.position.set(this.camera.position.x, 1750, this.camera.position.z);
+    this.cloudU.uT.value = this.time; this.cloudU.uCover.value = lerp(0.42, 0.8, overcast);
+    this.cloudU.uCol.value.setRGB(1, 1, 1).lerp(_c2.setRGB(0.5, 0.52, 0.56), overcast).multiplyScalar(0.1 + 0.9 * dayK).lerp(_c2.setRGB(1.0, 0.55, 0.3), (1 - dayK) * (1 - night) * 0.5).lerp(_c2.setRGB(0.07, 0.09, 0.14), night);
     this.envT -= dt;
     if (this.envT <= 0 || Math.abs(el - this.envEl) > 0.05) { // re-filter the sky into the lighting environment as the hour changes
       this.envT = 6; this.envEl = el;
@@ -662,6 +685,7 @@ export class Renderer {
   dispose() { this.renderer.dispose(); }
 
   // ───────────── camera / picking ─────────────
+  private fogMat!: THREE.MeshBasicMaterial; private clouds!: THREE.Mesh; private cloudU = { uTex: { value: null as THREE.Texture | null }, uT: { value: 0 }, uCover: { value: 0.4 }, uCol: { value: new THREE.Color(1, 1, 1) } };
   /** first-person ride-along: the unit whose eyes we are looking through, and how far the viewer has turned their head */
   fp: Unit | null = null; fpLook = { yaw: 0, pitch: 0, fov: 68 }; private fpSaved = { dist: 260, x: 0, z: 0 }; private alpha = 1;
   /** enter (or with null, leave) the first-person view. The unit keeps doing whatever it was ordered to do. */
@@ -679,7 +703,7 @@ export class Renderer {
     let ex = x, ey = y, ez = z, yaw = tu, pitch = 0;
     if (d.inf) { // through his eyes: the rifle and his hands are in the bottom of the frame
       const kn = this.pose.get(u) || 0, mv = Math.min(1, u.speed / d.speed);
-      ey = y + 4.12 - 0.93 * kn + Math.abs(Math.sin(T * 11 + u.id * 1.7)) * 0.1 * mv; ex += Math.sin(tu) * 0.42; ez += Math.cos(tu) * 0.42; pitch = -0.04;
+      ey = y + 4.16 - 0.93 * kn + Math.abs(Math.sin(T * 11 + u.id * 1.7)) * 0.1 * mv; ex += Math.sin(tu) * 0.3; ez += Math.cos(tu) * 0.3; pitch = -0.12;
     } else if (d.cls === 'air') { // from the nose (or the drone's camera), looking down at the ground ahead
       yaw = hd; ex += Math.sin(hd) * d.r * 1.15; ez += Math.cos(hd) * d.r * 1.15; ey = y + (d.hover ? -0.4 : 0.2); pitch = d.kami ? -0.3 : d.hover ? -0.38 : -0.3;
     } else if (d.cls === 'building') { ey = y + d.h + 2.5; ex -= Math.sin(tu) * d.r * 0.5; ez -= Math.cos(tu) * d.r * 0.5; pitch = -0.1; }
@@ -758,7 +782,7 @@ export class Renderer {
     if (def) {
       const y = this.map.groundY(x, z);
       this.ghost.position.set(x, y + 0.3 + yOff, z); this.ghost.rotation.y = rot; this.ghostMat.color.setHex(ok ? 0x40ff80 : 0xff4030);
-      const rg = def.jam || (def.weapons[0] && !def.weapons[0].bld ? def.weapons[0].range : 0) || def.radar;
+      const rg = def.heal || def.jam || (def.weapons[0] && !def.weapons[0].bld ? def.weapons[0].range : 0) || def.radar;
       if (rg) { this.rangeRing.visible = true; this.rangeRing.position.set(x, y + 2, z); this.rangeRing.scale.setScalar(rg); }
     }
   }
@@ -1303,6 +1327,11 @@ export class Renderer {
     for (const L of this.lights) { if (L.life > 0) { L.life -= dt; const k = Math.max(0, L.life / L.max); L.l.intensity = L.peak * k * k; } else L.l.intensity = 0; }
     this.shake *= Math.exp(-dt * 7);
     this.uTime.value = T; if (this.waterUni) this.waterUni.uTime.value = T;
+    // at eye level: lay grass around the viewer, and dim rather than black out what has not been scouted
+    const low = !!this.fp || this.cam.dist < 46, rv = this.fp ? 0.55 : 0;
+    this.scenery.grass(this.camera.position.x, this.camera.position.z, low && !Renderer.mobile || !!this.fp, g.snow, g.dry, g.mud);
+    if (this.scenery.reveal !== rv) { this.scenery.reveal = rv; this.world.reveal = rv; this.scenery.refresh(); }
+    this.fogMat.opacity = this.fp ? 0.3 : 1;
     this.scenery.update(dt, T, me.vis);
     if (this.grade) this.grade.uniforms.uHeat.value = lerp(this.grade.uniforms.uHeat.value, Math.min(1, fn / 30), 0.05);
     if (!paused) {

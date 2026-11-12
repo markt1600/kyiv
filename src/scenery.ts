@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { BIOMES, CELL, GameMap } from './map';
-import { clamp, lerp, mulberry32, vnoise } from './util';
+import { clamp, hash2, lerp, mulberry32, vnoise } from './util';
 
 export function noiseTexture(size: number, fn: (x: number, y: number) => [number, number, number, number]) {
   const c = document.createElement('canvas'); c.width = c.height = size;
@@ -288,6 +288,9 @@ export class Scenery {
   private px: Float32Array; private py: Float32Array; private pz: Float32Array; private sc: Float32Array; private rot: Float32Array;
   private count = 0; private byCell = new Map<number, number[]>();
   private t = 0; private map: GameMap;
+  private grassIM!: THREE.InstancedMesh; private gcx = 1e9; private gcz = 1e9; private gSnow = -1; private uGrass = { value: new THREE.Color(0.36, 0.5, 0.2) };
+  /** force the next update to recolour everything now */
+  refresh() { this.t = 0; }
   /** foliage meshes (left out of ambient occlusion: they are alpha-cut cards) */
   foliage: THREE.Object3D[] = [];
   uTime = { value: 0 }; private uSnow = { value: 0 }; private uBare = { value: 0 };
@@ -354,6 +357,29 @@ export class Scenery {
       this.kinds.push({ im, n: 0, burns, tall });
     };
     mk(gA, veg, counts[0], true, true, true); mk(gB, veg, counts[1], true, bi !== 1 && bi !== 2, true); mk(gR, stone, counts[2], false, false, true); mk(gG, veg, counts[3], true, false, false);
+    // grass blades: a fan of curved blades painted once, cut out by alpha, crossed in three planes
+    const gc = document.createElement('canvas'); gc.width = gc.height = 128; const gx = gc.getContext('2d')!, gr = mulberry32(31);
+    for (let i = 0; i < 34; i++) {
+      const bx = 8 + gr() * 112, lean = (gr() - 0.5) * 46, hh = 50 + gr() * 74, v = 150 + gr() * 105, w = 2.2 + gr() * 2.6;
+      gx.fillStyle = `rgb(${v * 0.92},${v},${v * 0.72})`; gx.beginPath(); gx.moveTo(bx - w, 128); gx.quadraticCurveTo(bx + lean * 0.3, 128 - hh * 0.6, bx + lean, 128 - hh); gx.quadraticCurveTo(bx + lean * 0.5, 128 - hh * 0.5, bx + w, 128); gx.fill();
+    }
+    const gtex = new THREE.CanvasTexture(gc); gtex.colorSpace = THREE.SRGBColorSpace; gtex.anisotropy = 4;
+    const gparts: THREE.BufferGeometry[] = [];
+    for (let i = 0; i < 3; i++) { const pg = new THREE.PlaneGeometry(2.6, 1.9); pg.translate(0, 0.95, 0); pg.rotateY(i * Math.PI / 3); const nr = pg.attributes.normal; for (let v = 0; v < nr.count; v++) nr.setXYZ(v, 0, 1, 0); gparts.push(pg); }
+    const gmat = new THREE.MeshStandardMaterial({ map: gtex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.92, metalness: 0, envMapIntensity: 0.3 });
+    gmat.onBeforeCompile = sh => {
+      sh.uniforms.uTime = this.uTime; sh.uniforms.uGrass = this.uGrass;
+      sh.vertexShader = 'uniform float uTime; varying float vGy;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+        vGy = position.y;
+        #ifdef USE_INSTANCING
+        float gph = instanceMatrix[3].x*0.31 + instanceMatrix[3].z*0.27;
+        transformed.x += sin(uTime*2.1 + gph)*position.y*0.11; transformed.z += cos(uTime*1.6 + gph*1.3)*position.y*0.08;
+        #endif`);
+      sh.fragmentShader = 'uniform vec3 uGrass; varying float vGy;\n' + sh.fragmentShader.replace('#include <map_fragment>', '#include <map_fragment>\n diffuseColor.rgb *= uGrass * (0.55 + 0.6*vGy);');
+    };
+    this.grassIM = new THREE.InstancedMesh(mergeGeometries(gparts), gmat, quality >= 1 ? 6500 : 3000);
+    this.grassIM.count = 0; this.grassIM.frustumCulled = false; this.grassIM.receiveShadow = true; this.grassIM.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    scene.add(this.grassIM); this.foliage.push(this.grassIM);
     const N = this.count = items.length;
     this.kind = new Uint8Array(N); this.idx = new Int32Array(N); this.cell = new Int32Array(N); this.state = new Uint8Array(N); this.tint = new Float32Array(N);
     this.px = new Float32Array(N); this.py = new Float32Array(N); this.pz = new Float32Array(N); this.sc = new Float32Array(N); this.rot = new Float32Array(N);
@@ -407,12 +433,40 @@ export class Scenery {
       for (const it of l) if (this.state[it] !== 2) { this.state[it] = 2; this.place(it, 0, 0); this.kinds[this.kind[it]].im.instanceMatrix.needsUpdate = true; }
     }
   }
+  /**
+   * Real grass underfoot. A patch of alpha-cut blade cards is laid around the camera when it is close to the ground and
+   * re-laid as it moves; positions come from a hash of the ground grid, so the same tuft is always in the same place.
+   */
+  grass(cx: number, cz: number, on: boolean, snow: number, dry: number, mud: number) {
+    const im = this.grassIM, map = this.map;
+    if (!on) { if (im.count) { im.count = 0; this.gcx = 1e9; } return; }
+    this.uGrass.value.setRGB(0.36, 0.5, 0.2).lerp(_c.setRGB(0.62, 0.56, 0.28), Math.max(dry * 0.75, mud * 0.4)).lerp(_c.setRGB(0.3, 0.24, 0.15), mud * 0.5).lerp(_c.setRGB(0.72, 0.7, 0.6), snow * 0.8);
+    if (Math.hypot(cx - this.gcx, cz - this.gcz) < 14 && Math.abs(snow - this.gSnow) < 0.1) return;
+    this.gcx = cx; this.gcz = cz; this.gSnow = snow;
+    const STEP = 1.7, RAD = 64, n = map.n, g0x = Math.floor((cx - RAD) / STEP), g0z = Math.floor((cz - RAD) / STEP), cnt = Math.ceil(RAD * 2 / STEP);
+    let k = 0; const cap = im.instanceMatrix.count, short = 1 - 0.65 * snow;
+    for (let j = 0; j < cnt && k < cap; j++) for (let i = 0; i < cnt && k < cap; i++) {
+      const gx = g0x + i, gz = g0z + j, h = hash2(gx, gz, 211);
+      if (h > 0.8) continue;
+      const x = (gx + hash2(gx, gz, 213)) * STEP, z = (gz + hash2(gx, gz, 215)) * STEP, d = Math.hypot(x - cx, z - cz);
+      if (d > RAD || x < 2 || z < 2 || x > map.size - 2 || z > map.size - 2) continue;
+      const c = Math.floor(z / CELL) * n + Math.floor(x / CELL);
+      if (map.road[c] || map.block[c] || map.fuel[c] < 0.02 || map.urban[c] > 0.75 && h > 0.2) continue;
+      const y = map.heightAt(x, z); if (y < map.waterY + 0.5) continue;
+      const sc = (0.6 + h * 1.4) * (1 - 0.5 * map.urban[c]) * (d > RAD - 14 ? (RAD - d) / 14 : 1); // thin out at the rim so the patch has no edge
+      _q.setFromAxisAngle(_y, h * 40); _p.set(x, y - 0.05, z); _s.set(sc, sc * short * (0.7 + hash2(gx, gz, 217) * 0.7), sc);
+      _m.compose(_p, _q, _s); im.setMatrixAt(k++, _m);
+    }
+    im.count = k; im.instanceMatrix.needsUpdate = true;
+  }
+  /** how brightly unexplored / unseen vegetation is drawn (raised in first person so the distance is not black) */
+  reveal = 0;
   update(dt: number, time: number, vis: Uint8Array) {
     this.uTime.value = time;
     this.t -= dt; if (this.t > 0) return; this.t = 0.3;
     const col = _c;
     for (let i = 0; i < this.count; i++) {
-      const v = vis[this.cell[i]], f = (v & 2 ? 1 : v & 1 ? 0.4 : 0) * (this.state[i] === 1 ? 0.07 : this.tint[i]);
+      const v = vis[this.cell[i]], f = Math.max(this.reveal, v & 2 ? 1 : v & 1 ? 0.4 : 0) * (this.state[i] === 1 ? 0.07 : this.tint[i]);
       this.kinds[this.kind[i]].im.setColorAt(this.idx[i], col.copy(this.tints[this.kind[i]]).multiplyScalar(f));
     }
     for (const k of this.kinds) if (k.im.instanceColor) k.im.instanceColor.needsUpdate = true;

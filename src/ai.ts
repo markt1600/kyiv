@@ -185,7 +185,11 @@ export class AI {
     const reach = prime ? 330 : 240 + P.expand * 330 + this.secs() * 0.8;
     const secs = this.secs();
     // prime self-preservation
-    if (prime && b.hp < b.def.hp * 0.5 && dist(b.x, b.z, tm.startX, tm.startZ) > 120) { g.give(b, { type: 'move', x: tm.startX, z: tm.startZ }); return; }
+    if (prime && b.hp < b.def.hp * 0.6) {
+      const ws = g.units.find(u => u.team === tm && !u.dead && u.built && u.def.heal > 0);
+      const hx = ws ? ws.x : tm.startX, hz = ws ? ws.z + 22 : tm.startZ;
+      if (dist(b.x, b.z, hx, hz) > (ws ? 60 : 120)) { g.give(b, { type: 'move', x: hx, z: hz }); return; }
+    }
     // orphaned frames
     for (const f of this.frames) {
       if (dist(b.x, b.z, f.x, f.z) < (prime ? 200 : 500) && !this.builders.some(o => o !== b && o.orders[0] && o.orders[0].target === f)) {
@@ -267,6 +271,7 @@ export class AI {
       if (this.tryBuild(b, id, ox, oz, 0, 8)) return;
     }
     if (!this.have('radar') && secs > 200 && this.tryBuild(b, 'radar')) return;
+    if (!this.have('workshop') && secs > 260 && tm.incM > 7 && tm.incE > 120 && this.tryBuild(b, 'workshop', undefined, undefined, 4, 20)) return;
     if (tm.metal > tm.stM * 0.92 && this.have('mstore') < 2 && !this.pend.mstore && this.tryBuild(b, 'mstore')) return;
     if (tm.energy > tm.stE * 0.92 && tm.incE > tm.useE + 30) {
       if (this.have('estore') < 1 + Math.floor(tm.incE / 400) && !this.pend.estore && this.tryBuild(b, 'estore')) return;
