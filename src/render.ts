@@ -8,7 +8,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { DAY_SECS, DEF_LIST, Model, UnitDef } from './defs';
+import { DAY_SECS, DEF_LIST, DEFS, Model, UnitDef } from './defs';
 import { World } from './world';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
@@ -126,6 +126,25 @@ function geosFor(def: UnitDef, team: number): Geos {
   let g = geoCache.get(key);
   if (!g) { g = buildGeos(def.model, team); geoCache.set(key, g); }
   return g;
+}
+
+/**
+ * A soldier where he fell: the same figure as the living man — helmet, armour, pouches, rifle still in his hands — laid on his
+ * back with his limbs gone slack. Built from the infantry model so nothing is lost when a unit becomes a body.
+ */
+function fallenSoldier(def: UnitDef, fac: number): THREE.BufferGeometry {
+  const g = buildGeos(def.model, fac), m = def.model, hip = m.hip!, knee = m.knee!, out: THREE.BufferGeometry[] = [];
+  const e = new THREE.Euler(), q = new THREE.Quaternion(), mat = new THREE.Matrix4(), one = new THREE.Vector3(1, 1, 1);
+  const tf = (rx: number, ry: number, rz: number, x: number, y: number, z: number) => mat.clone().compose(new THREE.Vector3(x, y, z), q.clone().setFromEuler(e.set(rx, ry, rz)), one);
+  const torso = tf(-0.06, 0.1, 0.05, 0, m.tp![1], 0), lt = tf(0.18, 0, -0.2, 0, hip, 0), rt = tf(-0.42, 0, 0.26, 0, hip, 0);
+  if (g.b) out.push(g.b);
+  if (g.t) out.push(g.t.applyMatrix4(torso));
+  if (g.h) out.push(g.h.applyMatrix4(tf(0.25, 0.55, 0.2, 0, m.neck! - m.tp![1], 0).premultiply(torso)));
+  if (g.p) out.push(g.p.applyMatrix4(lt)); if (g.q) out.push(g.q.applyMatrix4(rt));
+  if (g.k) out.push(g.k.applyMatrix4(tf(0.3, 0, 0, 0, knee - hip, 0).premultiply(lt))); if (g.l) out.push(g.l.applyMatrix4(tf(1.0, 0, 0, 0, knee - hip, 0).premultiply(rt)));
+  const all = mergeGeometries(out);
+  all.rotateX(-Math.PI / 2); all.translate(0, 0.42, 2.2);
+  return all;
 }
 
 let plateCache: { map: THREE.Texture; normal: THREE.Texture } | null = null;
@@ -325,14 +344,16 @@ export class Renderer {
     // matte camouflage and weathering: two scales of object-space noise break every surface into blotches, dust and grime
     const grime = noiseTexture(128, (x, y) => { const v = 255 * (tile(x, y, 128, 5, 171) * 0.6 + tile(x, y, 128, 13, 173) * 0.4), w = 255 * (tile(x, y, 128, 23, 175) * 0.6 + tile(x, y, 128, 51, 177) * 0.4); return [v, w, 0, 255]; });
     this.unitMat.onBeforeCompile = sh => {
-      sh.uniforms.uGrime = { value: grime };
-      sh.vertexShader = 'varying vec3 vOp;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vOp = position;');
-      sh.fragmentShader = 'varying vec3 vOp; uniform sampler2D uGrime;\n' + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      sh.uniforms.uGrime = { value: grime }; sh.uniforms.uSnow = this.uSeason.snow;
+      sh.vertexShader = 'varying vec3 vOp; varying float vUp;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vOp = position; vUp = normal.y;');
+      sh.fragmentShader = 'varying vec3 vOp; varying float vUp; uniform sampler2D uGrime; uniform float uSnow;\n' + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
         float cm = texture2D(uGrime, vOp.xz*0.11 + vOp.y*0.07).r*0.5 + texture2D(uGrime, vOp.zy*0.13 + 0.37).r*0.5;
         float gr = texture2D(uGrime, vOp.xy*0.9 + vOp.z*0.61).g;
         float px = smoothstep(0.42, 0.58, texture2D(uGrime, vOp.xy*0.43 + vOp.z*0.37).r*0.6 + texture2D(uGrime, vOp.zy*1.1 + vOp.x*0.7).g*0.4);
         diffuseColor.rgb *= mix(0.72, 1.12, smoothstep(0.44, 0.56, cm)) * (0.82 + 0.36*gr) * mix(0.84, 1.1, px);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.26, 0.20), (1.0 - smoothstep(0.0, 2.2, vOp.y)) * 0.45 * gr);`);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.26, 0.20), (1.0 - smoothstep(0.0, 2.2, vOp.y)) * 0.45 * gr);
+        // winter: snow settles on decks, roofs, helmets and shoulders
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.82, 0.85, 0.9), uSnow * smoothstep(0.55, 0.95, vUp) * smoothstep(0.3, 0.6, cm + gr*0.4) * 0.6);`);
     };
     this.plate = plate;
 
@@ -535,6 +556,7 @@ export class Renderer {
         }` }));
     this.clouds.renderOrder = -9; this.clouds.frustumCulled = false; this.scene.add(this.clouds); this.noReflect.push(this.clouds);
     this.world = new World(this.scene, map, quality);
+    this.world.setFallen([fallenSoldier(DEFS.rifle, 0), fallenSoldier(DEFS.rifle, 1)], this.unitMat);
     this.skyDay.set(bio.sky);
     // dynamic lights (fixed pool so shaders never recompile)
     for (let i = 0; i < (quality >= 1 ? 3 : 1); i++) {

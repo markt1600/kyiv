@@ -714,6 +714,10 @@ export class Game {
         break;
       case 'attack': {
         const t = o.target;
+        if (t && t.dead && d.weapons.length && !d.kami && !t.def.neutral && t.team.ally !== u.team.ally && d.cls !== 'building') {
+          // target destroyed: do not stand idle among its friends — fight on around where it fell
+          u.orders[0] = { type: 'fight', x: o.x, z: o.z }; u.forced = null; break;
+        }
         if (!t || t.dead || t.team.ally === u.team.ally || !d.weapons.length) { this.shift(u); break; }
         let w: WeaponDef | null = null;
         for (const ww of d.weapons) if (ww.tg & bit(t)) { w = ww; break; }

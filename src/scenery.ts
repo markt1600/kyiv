@@ -196,7 +196,7 @@ function card(w: number, h: number, pos: number[], rot: number[], pine: boolean,
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   return g;
 }
-function pine(leaf: number, trunkCol: number, _snow = 0): THREE.BufferGeometry {
+function pine(leaf: number, trunkCol: number, _snow = 0, dense = true): THREE.BufferGeometry {
   const r = mulberry32(7), parts = [colored(trunk(0.42, 10.5, 0.1), trunkCol)];
   const tiers = 7;
   for (let i = 0; i < tiers; i++) {
@@ -205,13 +205,14 @@ function pine(leaf: number, trunkCol: number, _snow = 0): THREE.BufferGeometry {
       const a = b / nb * 6.283 + i * 0.7 + r() * 0.4, droop = 0.35 + r() * 0.25 - t * 0.3, len = rad * (0.85 + r() * 0.3);
       // the card lies along the branch: its long axis points outward and sags
       parts.push(card(len * 0.95, len, [Math.sin(a) * len * 0.45, y - Math.sin(droop) * len * 0.3, Math.cos(a) * len * 0.45], [Math.PI / 2 - droop, a, 0], true, leaf, 0.6 + t * 0.5 + r() * 0.15, [Math.sin(a) * 0.6, 1, Math.cos(a) * 0.6]));
+      if (dense) parts.push(card(len * 0.7, len, [Math.sin(a) * len * 0.45, y - Math.sin(droop) * len * 0.3 - 0.1, Math.cos(a) * len * 0.45], [Math.PI / 2 - droop, a, Math.PI / 2], true, leaf, 0.5 + t * 0.4, [Math.sin(a) * 0.8, 0.5, Math.cos(a) * 0.8]));
     }
   }
   for (let b = 0; b < 3; b++) parts.push(card(1.9, 3.2, [0, 11.2, 0], [0, b * 1.047, 0], true, leaf, 1.15, [Math.sin(b * 1.047), 0.8, Math.cos(b * 1.047)]));
   for (let b = 0; b < 3; b++) parts.push(card(4.2, 5, [0, 6.4, 0], [0, b * 1.047 + 0.5, 0], true, leaf, 0.62, [Math.sin(b * 1.047), 0.6, Math.cos(b * 1.047)])); // inner mass so the trunk is not bare
   return mergeGeometries(parts);
 }
-function broadleaf(leaf: number, leaf2: number, trunkCol: number): THREE.BufferGeometry {
+function broadleaf(leaf: number, leaf2: number, trunkCol: number, dense = true): THREE.BufferGeometry {
   const r = mulberry32(11), parts = [
     colored(trunk(0.55, 5.4, 0.25), trunkCol),
     colored(T(new THREE.CylinderGeometry(0.1, 0.2, 3, 5), 1.0, 4.6, 0.2, 0, -0.9), trunkCol),
@@ -226,6 +227,7 @@ function broadleaf(leaf: number, leaf2: number, trunkCol: number): THREE.BufferG
       const u = r() * 2 - 1, a = r() * 6.283, s = Math.sqrt(1 - u * u), dx = s * Math.cos(a), dy = u * 0.8 + 0.15, dz = s * Math.sin(a), d = cr * (0.45 + r() * 0.5);
       const px = cx + dx * d, py = cy + dy * d, pz = cz + dz * d, sz = cr * (0.95 + r() * 0.5);
       parts.push(card(sz, sz * 2, [px, py, pz], [(r() - 0.5) * 1.6, r() * 6.283, (r() - 0.5) * 1.2], false, r() < 0.5 ? leaf : leaf2, 0.62 + 0.5 * Math.min(1, Math.max(0, (py - 3.6) / 5)) + r() * 0.12, [px - cx * 0.4, (py - 5.6) * 1.2 + 0.8, pz - cz * 0.4]));
+      if (dense) { const ya = r() * 6.283; parts.push(card(sz * 0.9, sz * 1.7, [px, py, pz], [Math.PI / 2 + (r() - 0.5) * 0.7, ya, 0], false, r() < 0.5 ? leaf : leaf2, 0.5 + 0.4 * Math.min(1, Math.max(0, (py - 3.6) / 5)), [px - cx * 0.4, (py - 5.6) * 1.2 - 0.2, pz - cz * 0.4])); }
     }
   }
   return mergeGeometries(parts);
@@ -327,7 +329,7 @@ export class Scenery {
     stone.onBeforeCompile = mottle;
     // per-biome kit: [tree A, tree B, rock, grass]
     let gA: THREE.BufferGeometry, gB: THREE.BufferGeometry, gR: THREE.BufferGeometry, gG: THREE.BufferGeometry | null;
-    if (bi === 0) { gA = pine(0x3d7a46, 0x4a3524); gB = broadleaf(0x5e9c3e, 0x477f34, 0x4c3a26); gR = rock(0x7d7a72); gG = tuft(0x55782f, 0x6a8a3a); gG.scale(0.55, 0.5, 0.55); }
+    if (bi === 0) { gA = pine(0x3d7a46, 0x4a3524, 0, quality >= 1); gB = broadleaf(0x5e9c3e, 0x477f34, 0x4c3a26, quality >= 1); gR = rock(0x7d7a72); gG = tuft(0x55782f, 0x6a8a3a); gG.scale(0.55, 0.5, 0.55); }
     else if (bi === 1) { gA = cactus(0x5d8a4a); gB = bush(0x9a9455, 0x7f8048); gR = rock(0xb07d55); gG = tuft(0xb9a25e, 0xa08a4c); }
     else if (bi === 2) { gA = pine(0x2d5a45, 0x4a3a2c, 1); gB = bush(0xdfe9ef, 0xb8cbd6); gR = rock(0x8b98a4); gG = null; }
     else { gA = deadTree(0x1c1716); gB = shard(0x1a1518, 0xff5a18); gR = rock(0x2c2628); gG = null; }
@@ -452,11 +454,13 @@ export class Scenery {
       const x = (gx + hash2(gx, gz, 213)) * STEP, z = (gz + hash2(gx, gz, 215)) * STEP, d = Math.hypot(x - cx, z - cz);
       if (d > RAD || x < 2 || z < 2 || x > map.size - 2 || z > map.size - 2) continue;
       const c = Math.floor(z / CELL) * n + Math.floor(x / CELL);
-      if (map.road[c] || map.block[c] || map.fuel[c] < 0.02 || map.urban[c] > 0.75 && h > 0.55) continue;
-      const y = map.heightAt(x, z); if (y < map.waterY + 0.5) continue;
-      const lush = 0.55 + 0.75 * vnoise(x / 23, z / 23, 219); // meadow here, cropped turf there
+      const wet = map.heights[(Math.floor(z / CELL) * 2 + 1) * map.hn + Math.floor(x / CELL) * 2 + 1] < map.waterY + 2.6;
+      if (map.road[c] || map.block[c] || map.fuel[c] < 0.02 && !wet || map.urban[c] > 0.75 && h > 0.55) continue;
+      const y = map.heightAt(x, z); if (y < map.waterY - 0.3) continue;
+      const reed = y < map.waterY + 2.4 ? 1 : 0; // the water's edge grows tall reeds, which also softens the line of the bank
+      const lush = reed ? 1.9 : 0.55 + 0.75 * vnoise(x / 23, z / 23, 219); // meadow here, cropped turf there
       const sc = (0.5 + h * 0.9) * lush * (1 - 0.5 * map.urban[c]) * (d > RAD - 14 ? (RAD - d) / 14 : 1); // thin out at the rim so the patch has no edge
-      _q.setFromAxisAngle(_y, h * 40); _p.set(x, y - 0.05, z); _s.set(sc, sc * short * (0.7 + hash2(gx, gz, 217) * 0.7), sc);
+      _q.setFromAxisAngle(_y, h * 40); _p.set(x, y - 0.05, z); _s.set(sc * (reed ? 0.6 : 1), sc * (reed ? 1.5 : short) * (0.7 + hash2(gx, gz, 217) * 0.7), sc * (reed ? 0.6 : 1));
       _m.compose(_p, _q, _s); im.setMatrixAt(k, _m);
       const tone = 0.7 + hash2(gx, gz, 221) * 0.55; im.setColorAt(k++, _c.setRGB(tone * (0.9 + hash2(gx, gz, 223) * 0.3), tone, tone * 0.85));
     }

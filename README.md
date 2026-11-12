@@ -90,6 +90,7 @@ enemy structure; a guidance satellite cuts artillery dispersion by 60%.
 
 ## Controls
 
+- **Click an enemy** with armed units selected to attack it (it highlights under the pointer; Alt-click inspects instead). When it is destroyed they fight on against nearby enemies
 - **Left-click / drag** select · **double-click** all of type · **Ctrl+1-9** / **1-9** groups
 - **Right-click** move / attack / assist / repair / salvage / set rally
 - **Shift** queue orders or place many buildings (drag for a row)

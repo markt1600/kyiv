@@ -188,6 +188,8 @@ export class UI {
       else {
         const u = this.unitAt(e.clientX, e.clientY);
         const now = performance.now();
+        // a click on an enemy with armed units selected is an attack order (Alt-click to inspect the enemy instead)
+        if (u && u.team.ally !== this.me.ally && !u.def.neutral && !e.altKey && this.armed()) { this.rightClick(e.clientX, e.clientY, e.shiftKey); this.lastClick = { t: now, u: null }; return; }
         if (u && u.team === this.me && this.lastClick.u && this.lastClick.u.def === u.def && now - this.lastClick.t < 350) {
           const p = this.tmp, all: Unit[] = [];
           for (const o of this.game.units) if (o.team === this.me && o.def === u.def && !o.dead) { this.r.project(o.x, o.y, o.z, p); if (p.ok && p.x > 0 && p.y > 0 && p.x < innerWidth && p.y < innerHeight) all.push(o); }
@@ -306,8 +308,13 @@ export class UI {
   }
   /** what the pointer is over while a targeting order is armed: the unit that would be hit / guarded / repaired, or the patch of ground */
   private hover(): { u: Unit | null; x: number; z: number; r: number; col: string; dash: boolean } | null {
-    const m = this.mode; if (!m || m === 'move' || m === 'patrol' || !this.inside || this.r.fp || (this.mobile && !this.tch)) return null;
-    const me = this.me, sel = this.selected;
+    const m = this.mode, me = this.me, sel = this.selected;
+    if (!this.inside || this.r.fp || this.placing || (this.mobile && !this.tch) || (this.drag && this.drag.on)) return null;
+    if (!m) { // nothing armed: with units that can shoot selected, an enemy under the pointer is a target — one click attacks it
+      const e = this.armed() ? this.unitAt(this.mx, this.my, o => o.team.ally !== me.ally && !o.def.neutral) : null;
+      return e ? { u: e, x: e.x, z: e.z, r: e.def.r, col: '#ff5a40', dash: false } : null;
+    }
+    if (m === 'move' || m === 'patrol') return null;
     let u: Unit | null = null, col = '#ff5a40', r = 10, dash = false;
     if (m === 'fight') { u = this.unitAt(this.mx, this.my, o => o.team.ally !== me.ally); dash = true; r = 12; }
     else if (m === 'guard') { u = this.unitAt(this.mx, this.my, o => o.team.ally === me.ally && !sel.has(o)); col = '#ffe060'; if (!u) return null; }
@@ -318,8 +325,11 @@ export class UI {
     const p = this.r.pick(this.mx, this.my); if (!p) return null;
     return { u: null, x: p.x, z: p.z, r, col, dash };
   }
+  /** do the selected units include anything of mine that can shoot? */
+  private armed() { for (const u of this.selected) if (u.team === this.me && !u.dead && u.def.weapons.length) return true; return false; }
+  private hot = false;
   private drawHover(ctx: CanvasRenderingContext2D) {
-    const h = this.hover(); if (!h) return;
+    const h = this.hover(); this.hot = !!h && !!h.u && !this.mode; if (!h) return;
     const r = this.r, p = this.tmp, map = this.game.map, pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.008);
     ctx.save(); ctx.strokeStyle = h.col; ctx.fillStyle = h.col; ctx.lineJoin = 'round';
     if (h.u) { // a unit: light it up with a filled halo, corner brackets and its name
@@ -602,7 +612,7 @@ export class UI {
         this.r.setGhost(def, wx, wz, pc.ok, yo, sb ? sb.ang : 0);
       } else this.r.setGhost(null);
     } else this.r.setGhost(null);
-    $('gl').style.cursor = this.placing ? 'cell' : this.mode ? 'crosshair' : 'default';
+    $('gl').style.cursor = this.placing ? 'cell' : this.mode || this.hot ? 'crosshair' : 'default';
     this.drawOverlay(dt);
     this.hudT -= dt; if (this.hudT <= 0) { this.hudT = this.mobile ? 0.3 : 0.2; this.refreshHud(paused); }
     this.mmT -= dt; if (this.mmT <= 0) { this.mmT = this.mobile ? 0.25 : 0.1; this.drawMinimap(); }

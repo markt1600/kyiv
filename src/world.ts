@@ -133,6 +133,83 @@ function facadeKit(parts: THREE.BufferGeometry[], r: () => number, a: number, d:
   }
 }
 
+/** an arched window or doorway set into a wall: dark opening, pale surround, sill. `ax` is the wall's outward normal axis */
+function opening(parts: THREE.BufferGeometry[], x: number, y: number, z: number, w: number, hh: number, ax: 'x' | 'z', sgn: number, dark = 0x141a22, frame = 0xf0ece2) {
+  const t = 0.16, o = sgn * 0.09;
+  const b = (ww: number, h2: number, dx: number, dy: number, hex: number, out: number) => parts.push(ax === 'z' ? bx(ww, h2, t, x + dx, y + dy, z + sgn * out, hex) : bx(t, h2, ww, x + sgn * out, y + dy, z + dx, hex));
+  b(w + 0.36, hh + 0.3, 0, -0.1, frame, 0.02); b(w, hh, 0, 0, dark, 0.1); b(w * 0.7, w * 0.3, 0, hh, dark, 0.1); b(w * 0.7 + 0.3, w * 0.3 + 0.16, 0, hh, frame, 0.02); b(w + 0.6, 0.14, 0, -0.2, frame, 0.16);
+  void o;
+}
+/** Close-range detail for everything that is not an apartment block: windows, doors, cornices, steps, bracing, pipes. */
+function detailKit(c: Civ, parts: THREE.BufferGeometry[], r: () => number, W: number, L: number, h: number) {
+  const STONE = 0xbdb8ac, DARK = 0x141a22;
+  switch (c.kind) {
+    case 0: { // house: window frames and shutters, a door with a step and a little porch roof, gutter and downpipe, a woodpile
+      const sh = [0x3a5a6a, 0x5a3a2a, 0x3c5a3a, 0x6a6a5a][Math.floor(r() * 4)];
+      for (const sx of [-1, 1]) { parts.push(bx(1.24, 1.34, 0.06, sx * 1.1, 0.98, 3.0, 0xf0ece2), bx(0.3, 1.1, 0.08, sx * 1.1 - 0.68, 1.1, 3.02, sh), bx(0.3, 1.1, 0.08, sx * 1.1 + 0.68, 1.1, 3.02, sh), bx(1.5, 0.1, 0.24, sx * 1.1, 0.95, 3.06, 0xd8d4c8)); }
+      parts.push(bx(1.3, 0.2, 0.8, 3.0, 0, 0, 0x8a867e, false, 1, Math.PI / 2), bx(1.5, 0.12, 1.1, 3.1, 2.1, 0, 0x55504a, false, 1, Math.PI / 2), bx(0.12, 2.8, 0.12, -2.7, 0, 2.9, 0x4a4c4e), bx(5.6, 0.12, 0.16, 0, 2.74, 3.1, 0x4a4c4e),
+        bx(1.8, 0.9, 0.7, -2.2, 0, -3.3, 0x6a4a30), bx(0.9, 0.5, 0.9, 2.6, 0, 3.4, 0x3f5a3a));
+      break;
+    }
+    case 3: { // warehouse: ribbed roller door, a strip of high windows, loading dock, roof vents, a stack of pallets
+      const hh = h * 0.75;
+      for (let i = 0; i < 6; i++) parts.push(bx(W * 0.3, 0.1, 0.06, 0, hh * 0.55 * (i + 0.5) / 6, L / 2 + 0.18, 0x3c4044));
+      for (let x = -W / 2 + 1.6; x < W / 2 - 1; x += 2.6) parts.push(bx(1.7, 0.8, 0.1, x, hh * 0.72, -L / 2 - 0.06, 0x2a3640), bx(1.9, 0.1, 0.14, x, hh * 0.72 - 0.1, -L / 2 - 0.08, 0xc8c8c0));
+      parts.push(bx(W * 0.42, 0.9, 2.4, 0, 0, L / 2 + 1.2, 0x7c7a74), bx(0.9, 2.1, 0.1, -W * 0.34, 0, L / 2 + 0.06, 0x2a2622), bx(1.4, 1.2, 1.2, W * 0.36, 0, L / 2 + 1, 0x8c7a52), bx(1.4, 0.9, 1.2, W * 0.36 + 0.2, 1.2, L / 2 + 1, 0x7a6a48),
+        cyl(0.5, 0.5, 0.9, -W * 0.2, hh + 0.6, 0, 0x8a8e92, 8), cyl(0.5, 0.5, 0.9, W * 0.2, hh + 0.6, 0, 0x8a8e92, 8), bx(0.16, hh, 0.16, -W / 2 - 0.1, 0, L / 2 - 0.4, 0x4a4c4e), bx(0.16, hh, 0.16, W / 2 + 0.1, 0, -L / 2 + 0.4, 0x4a4c4e));
+      break;
+    }
+    case 4: { // church: arched windows down the nave, cornice and plinth, belfry openings, steps and a canopy at the door
+      const w = W * 0.7, nl = L * 0.86, wy = h * 0.14;
+      for (const sx of [-1, 1]) for (const k of [-0.3, 0, 0.3]) opening(parts, sx * w / 2, wy, k * nl, 1.0, h * 0.16, 'x', sx);
+      opening(parts, 0, wy, -nl / 2, 1.2, h * 0.18, 'z', -1);
+      parts.push(bx(w + 0.5, 0.4, nl + 0.5, 0, h * 0.45 - 0.4, 0, STONE), bx(w + 0.4, 0.6, nl + 0.4, 0, 0, 0, STONE, false, 0.85), bx(3.9, 0.36, 3.9, 0, h * 0.7 - 0.36, L * 0.36, STONE), bx(3.8, 0.5, 3.8, 0, h * 0.42, L * 0.36, STONE));
+      for (const [ax, sg] of [['x', 1], ['x', -1], ['z', 1]] as ['x' | 'z', number][]) opening(parts, ax === 'x' ? sg * 1.7 : 0, h * 0.52, L * 0.36 + (ax === 'z' ? sg * 1.7 : 0), 0.9, h * 0.1, ax, sg);
+      parts.push(bx(3, 0.3, 1.6, 0, 0, L * 0.36 + 2.6, 0x9a968e), bx(2.4, 0.3, 1, 0, 0.3, L * 0.36 + 2.3, 0x9a968e), bx(2.6, 0.2, 1.4, 0, 3.3, L * 0.36 + 2.2, GREEN));
+      for (let i = 0; i < 8; i++) { const a = i / 8 * 6.283; parts.push(bx(0.5, h * 0.16, 0.12, Math.sin(a) * 2.32, h * 0.52, Math.cos(a) * 2.32, DARK, false, 1, a)); }
+      break;
+    }
+    case 5: { // St Sophia: two tiers of arched windows, cornices, a pedimented west door, the bell tower's arcades
+      const hw = W * 0.4, hl = L * 0.4;
+      for (const sg of [-1, 1]) for (const k of [-0.55, -0.18, 0.18, 0.55]) { opening(parts, sg * hw, 1.6, k * hl, 1.1, 2.6, 'x', sg); opening(parts, sg * hw, 5.8, k * hl, 0.9, 1.6, 'x', sg); opening(parts, k * hw, 1.6, sg * hl, 1.1, 2.6, 'z', sg); opening(parts, k * hw, 5.8, sg * hl, 0.9, 1.6, 'z', sg); }
+      parts.push(bx(W * 0.82, 0.3, L * 0.82, 0, 4.9, 0, STONE), bx(W * 0.82, 0.7, L * 0.82, 0, 0, 0, STONE, false, 0.85), bx(4, 0.4, 2, 0, 0, hl + 1.2, 0x9a968e), bx(3.4, 4.4, 0.5, 0, 0, hl + 0.3, WHITE), bx(1.6, 3, 0.2, 0, 0, hl + 0.62, 0x3a2a1e), bx(4, 0.5, 0.9, 0, 4.4, hl + 0.4, GREEN));
+      for (let i = 0; i < 12; i++) { const a = i / 12 * 6.283; parts.push(bx(0.55, 2.6, 0.12, Math.sin(a) * 2.76, 15, Math.cos(a) * 2.76, DARK, false, 1, a)); }
+      const tx = W * 0.42, tz = L * 0.42;
+      for (const [ax, sg] of [['x', 1], ['x', -1], ['z', 1], ['z', -1]] as ['x' | 'z', number][]) { const ox = ax === 'x' ? sg : 0, oz = ax === 'z' ? sg : 0; opening(parts, tx + ox * 1.8, 5, tz + oz * 1.8, 1.0, 3, ax, sg); opening(parts, tx + ox * 1.5, 12.6, tz + oz * 1.5, 1.0, 3.2, ax, sg, DARK, 0xdfe8ee); opening(parts, tx + ox * 1.2, 19, tz + oz * 1.2, 0.8, 2.2, ax, sg); }
+      parts.push(bx(4.1, 0.4, 4.1, tx, 10.7, tz, WHITE), bx(3.5, 0.4, 3.5, tx, 17.7, tz, WHITE), bx(2.9, 0.4, 2.9, tx, 22.7, tz, WHITE));
+      break;
+    }
+    case 6: { // Motherland Monument: the museum drum gets doors, ribs and a terrace; the figure gets the folds of her robe
+      for (let i = 0; i < 16; i++) { const a = i / 16 * 6.283; parts.push(bx(0.5, 6.4, 0.5, Math.sin(a) * 7.0, 0.2, Math.cos(a) * 7.0, 0x7a7770, false, 1, a), bx(1.5, 3.2, 0.16, Math.sin(a + 0.196) * 6.9, 1.2, Math.cos(a + 0.196) * 6.9, i % 4 ? 0x1c242c : 0x3a2a1e, false, 1, a + 0.196)); }
+      parts.push(cyl(8.6, 9, 0.7, 0, 0, 0, 0x8a867e, 18), cyl(7.7, 7.7, 0.5, 0, 7, 0, 0x6f6c66, 18), cyl(5.2, 5.2, 0.4, 0, 20.6, 0, 0x8d8a84, 14));
+      for (let i = 0; i < 12; i++) { const a = i / 12 * 6.283, g = new THREE.BoxGeometry(0.3, 19, 0.5); g.translate(0, 9.5, 0); g.rotateX(0.075); g.rotateY(a); g.translate(Math.sin(a) * 2.6, 21.5, Math.cos(a) * 2.6); parts.push(paint(g, 0x9aa0a6, 1, false, 0.04)); }
+      parts.push(bx(3.6, 2.2, 2.4, 0, 43, 0, 0xaab0b6), bx(1.5, 1.2, 1.5, 0, 46.6, 0, 0xaab0b6));
+      break;
+    }
+    case 7: { // Independence Monument: stepped base, banded column, capital
+      parts.push(cyl(4.6, 5, 0.5, 0, 0, 0, 0xb8b4a8, 16), cyl(3.8, 4.2, 0.5, 0, 0.5, 0, 0xc4c0b4, 16), bx(3.6, 0.4, 3.6, 0, 6.9, 0, STONE), bx(3.5, 0.4, 3.5, 0, 2, 0, STONE), cyl(1.25, 1.25, 0.5, 0, 7.1, 0, GOLD, 12), cyl(1.3, 1, 0.9, 0, 27.2, 0, WHITE, 12));
+      for (const y of [11, 15, 19, 23]) parts.push(cyl(1.08, 1.1, 0.3, 0, y, 0, 0xd8d4c8, 12));
+      for (const [ax, sg] of [['x', 1], ['x', -1], ['z', 1], ['z', -1]] as ['x' | 'z', number][]) parts.push(ax === 'x' ? bx(0.14, 2.6, 2, sg * 1.66, 3.2, 0, GOLD, false, 0.8) : bx(2, 2.6, 0.14, 0, 3.2, sg * 1.66, GOLD, false, 0.8));
+      break;
+    }
+    case 8: { // TV tower: cross-bracing between the legs, platform rails, dishes and aerials
+      for (let lvl = 0; lvl < 5; lvl++) { const y0 = lvl * 9, y1 = y0 + 9, r0 = 6.4 - y0 * 0.131, r1 = 6.4 - y1 * 0.131;
+        for (let sd = 0; sd < 4; sd++) { const a = sd * Math.PI / 2, len = Math.hypot(r0 + r1, 9), g = new THREE.BoxGeometry(0.24, len, 0.24); g.rotateZ((sd % 2 ? 1 : -1) * Math.atan2(r0 + r1, 9)); g.translate(0, (y0 + y1) / 2, (r0 + r1) / 2); g.rotateY(a); parts.push(paint(g, lvl % 2 ? 0xb8442e : 0xd8d8d2, 1, false, 0.03));
+          const g2 = new THREE.BoxGeometry(r1 * 2, 0.24, 0.24); g2.translate(0, y1, r1); g2.rotateY(a); parts.push(paint(g2, 0xd8d8d2, 1, false, 0.03)); } }
+      for (const [y, s2] of [[15.8, 6.6], [31.2, 3.6]]) for (const sg of [-1, 1]) parts.push(bx(s2 * 2, 1, 0.1, 0, y, sg * s2, 0x6a7078), bx(0.1, 1, s2 * 2, sg * s2, y, 0, 0x6a7078));
+      parts.push(cyl(1.3, 0.4, 0.5, 2.6, 46, 0, 0xe0e0da, 10), cyl(1.1, 0.3, 0.4, -2.4, 49, 1, 0xe0e0da, 10), cyl(0.9, 0.3, 0.4, 0, 52, -2.2, 0xe0e0da, 10), bx(9, 0.8, 9, 0, 0, 0, 0x7c7a74), bx(4, 3, 5, 9, 0, 3, 0x8a8f94), bx(1, 2, 0.1, 9, 0, 5.56, 0x2a2622));
+      break;
+    }
+    case 9: { // hangar: structural ribs over the vault, tall sliding doors with their tracks, annexe windows, an apron
+      for (let x = -W / 2 + 2; x <= W / 2 - 1; x += 4.4) for (let k = 0; k < 8; k++) { const a0 = k / 8 * Math.PI, a1 = (k + 1) / 8 * Math.PI, y0 = Math.sin(a0) * h, z0 = Math.cos(a0) * L * 0.5, y1 = Math.sin(a1) * h, z1 = Math.cos(a1) * L * 0.5, g = new THREE.BoxGeometry(0.4, 0.3, Math.hypot(z1 - z0, y1 - y0) + 0.2); g.rotateX(-Math.atan2(y1 - y0, z1 - z0)); g.translate(x, (y0 + y1) / 2 + 0.12, (z0 + z1) / 2); parts.push(paint(g, 0x6a7074, 1, false, 0.03)); }
+      for (let k = -3; k <= 3; k++) parts.push(bx(0.16, h * 0.5, L * 0.1 - 0.2, W / 2 - 0.05, 0, k * L * 0.1, k % 2 ? 0x3a4046 : 0x30363c));
+      parts.push(bx(0.3, 0.3, L * 0.74, W / 2 - 0.1, h * 0.5, 0, 0x55585c), bx(W + 14, 0.14, L + 10, 3, 0.02, 0, 0x5c5e60));
+      for (let z = L / 2 + 1; z < L / 2 + 9; z += 2.2) parts.push(bx(0.1, 1, 1.2, 3.06, 1.2, z + 0.6, 0x2a3640), bx(0.1, 1, 1.2, -3.06, 1.2, z + 0.6, 0x2a3640));
+      break;
+    }
+  }
+}
+
 function buildCiv(c: Civ): THREE.BufferGeometry {
   const r = mulberry32(Math.floor(c.seed * 1e6) + 1), W = c.fw * CELL - 2, L = c.fh * CELL - 2;
   const lvl = c.dmg, char = lvl === 2 ? 0.55 : lvl === 1 ? 0.86 : 1;
@@ -225,6 +302,7 @@ function buildCiv(c: Civ): THREE.BufferGeometry {
       parts.push(paint(g, 0x8c9296, 1, false, 0.05), bx(W, 0.6, L, 0, 0, 0, 0x6f7275), bx(0.4, h * 0.9, L * 0.9, -W / 2 + 0.3, 0, 0, 0x7a8084), bx(0.4, h * 0.5, L * 0.7, W / 2 - 0.3, 0, 0, 0x2c3034), bx(6, 3, 10, 0, 0, L / 2 + 5, 0x7d8286));
     }
   }
+  detailKit(c, parts, r, W, L, h);
   if (lvl) {
     for (const g of parts) { const col = g.attributes.color.array as Float32Array; for (let i = 0; i < col.length; i++) col[i] *= char; }
     scars(c, parts, c.kind === 2 ? Math.min(W, L) - 1 : c.kind === 0 ? 5.6 : W * (c.kind >= 4 && c.kind <= 8 ? 0.7 : 1), c.kind === 2 ? Math.min(W, L) - 1 : c.kind === 0 ? 6 : L * (c.kind >= 4 && c.kind <= 8 ? 0.7 : 1), c.kind === 0 ? 2.8 : c.kind === 3 ? h * 0.75 : c.kind === 4 ? h * 0.45 : c.kind === 5 ? 9 : c.kind >= 6 && c.kind <= 8 ? 7 : h, lvl);
@@ -244,6 +322,14 @@ function buildRuin(c: Civ): THREE.BufferGeometry {
     const hh = h * (edge ? 0.08 + r() * r() * 0.6 : 0.05 + r() * 0.2), w = W / nx, l = L / nz;
     if (r() < 0.2) continue;
     parts.push(bx(w * (0.5 + r() * 0.5), hh, l * (0.5 + r() * 0.5), -W / 2 + (i + 0.5) * w, 0, -L / 2 + (j + 0.5) * l, col, tiled, 0.3 + r() * 0.35));
+  }
+  for (let k = 0; k < 6 + W * L / 20; k++) { // reinforcing bars bent out of broken concrete
+    const g = new THREE.CylinderGeometry(0.05, 0.05, 1.5 + r() * 3, 4); g.translate(0, 0.9, 0); g.rotateZ((r() - 0.5) * 1.3); g.rotateX((r() - 0.5) * 1.3); g.translate((r() - 0.5) * W, r() * Math.min(h * 0.3, 6), (r() - 0.5) * L);
+    parts.push(paint(g, 0x3a2a20, 1, false, 0.1));
+  }
+  for (let k = 0; k < 3 + W * L / 60; k++) { // floor slabs that came down whole and lie propped at an angle
+    const g = new THREE.BoxGeometry(3 + r() * 4, 0.35, 2.5 + r() * 3); g.rotateZ((r() - 0.5) * 1.1); g.rotateY(r() * 6.28); g.translate((r() - 0.5) * (W + 3), 0.8 + r() * 1.8, (r() - 0.5) * (L + 3));
+    parts.push(paint(g, 0x7a766e, 0.4 + r() * 0.3, false, 0.08));
   }
   for (let k = 0; k < 10 + W * L / 14; k++) {
     const s = 0.8 + r() * 2.6, g = new THREE.BoxGeometry(s, s * (0.3 + r() * 0.5), s * (0.6 + r() * 0.8));
@@ -414,6 +500,11 @@ export class World {
   private props: { m: THREE.InstancedMesh; cells: Int32Array; base: THREE.Color[] }[] = [];
   /** raised in first person so the unexplored distance is dim rather than invisible */
   reveal = 0;
+  /** fallen soldiers keep everything they carried: the renderer hands over a full-detail figure for each side, posed on its back */
+  private fallen: THREE.InstancedMesh[] = [];
+  setFallen(geos: THREE.BufferGeometry[], mat: THREE.Material) {
+    for (const g of geos) { const m = new THREE.InstancedMesh(g, mat, 3000); m.count = 0; m.frustumCulled = false; m.receiveShadow = true; m.castShadow = this.quality >= 1; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.setColorAt(0, _c.set(0xffffff)); this.scene.add(m); this.fallen.push(m); }
+  }
   /** a bridge has been brought down */
   dropBridge(i: number) { const m = this.bridges[i]; if (!m) return; m.geometry.dispose(); m.geometry = bridgeGeo(this.map.bridges[i]); }
   /** a building's damage level has changed: rebuild it holed, half-collapsed, or as rubble */
@@ -435,13 +526,14 @@ export class World {
       for (const p of this.props) { for (let i = 0; i < p.cells.length; i++) { const v = vis[p.cells[i]]; p.m.setColorAt(i, _c.copy(p.base[i]).multiplyScalar(Math.max(this.reveal, v & 2 ? 1 : v & 1 ? 0.45 : 0))); } if (p.m.instanceColor) p.m.instanceColor.needsUpdate = true; }
     }
     // the dead: fresh, then bloated and darkening, then collapsing into the ground, then bones
-    let n = 0, nb = 0;
+    let n = 0, nb = 0; const nf = [0, 0];
     const dayTicks = TICK * YEAR_SECS / 365, snow = game.snow;
     for (const b of game.bodies) {
       if (n >= 3000 || !(vis[map.cellOf(b.x, b.z)] & 1)) continue;
       const age = (game.tick - b.born) / dayTicks;
       let sy = 1, sxz = 1; const col = _c;
-      if (b.fac < 2) col.copy(UNIFORM[b.fac]); else col.copy(COATS[b.id % COATS.length]);
+      const sol = b.fac < 2 && this.fallen.length === 2;
+      if (sol) col.setRGB(1, 1, 1); else if (b.fac < 2) col.copy(UNIFORM[b.fac]); else col.copy(COATS[b.id % COATS.length]);
       if (age > 45) { sy = 0.3; sxz = 0.8; col.setRGB(0.34, 0.31, 0.25); }
       else if (age > 14) { const k = (age - 14) / 31; sy = lerp(0.8, 0.4, k); col.lerp(_c2.setRGB(0.1, 0.085, 0.06), 0.75 + 0.15 * k); }
       else if (age > 3) { const k = (age - 3) / 11; sy = 1 + 0.3 * Math.sin(k * Math.PI); col.lerp(_c2.setRGB(0.2, 0.22, 0.14), k * 0.7); }
@@ -449,13 +541,15 @@ export class World {
       map.normalAt(b.x, b.z, _nn); _n.set(_nn.x, _nn.y, _nn.z);
       _q.setFromUnitVectors(_y, _n); _q2.setFromAxisAngle(_y, b.rot); _q.multiply(_q2);
       _p.set(b.x, b.y + 0.05, b.z); _s.set(sxz, sy, sxz); _m.compose(_p, _q, _s);
-      this.bodyIM.setMatrixAt(n, _m); this.bodyIM.setColorAt(n, col); n++;
+      if (sol) { const im = this.fallen[b.fac]; im.setMatrixAt(nf[b.fac], _m); im.setColorAt(nf[b.fac]++, col); }
+      else { this.bodyIM.setMatrixAt(n, _m); this.bodyIM.setColorAt(n, col); n++; }
       if (age < 30) {
         const k = Math.min(1, age / 8), fade = age > 20 ? 1 - (age - 20) / 10 : 1, grow = Math.min(1, 0.35 + (game.tick - b.born) / (TICK * 14));
         _s.setScalar((1.2 + (b.id % 5) * 0.2) * grow * fade); _p.set(b.x + 0.4, b.y + 0.12, b.z + 0.3); _q.setFromUnitVectors(_y, _n); _m.compose(_p, _q, _s);
         this.bloodIM.setMatrixAt(nb, _m); this.bloodIM.setColorAt(nb, col.setRGB(lerp(0.26, 0.07, k), lerp(0.015, 0.025, k), lerp(0.015, 0.02, k)).lerp(_c2.setRGB(0.8, 0.82, 0.85), snow > 0.3 ? Math.min(0.6, age / 10) : 0)); nb++;
       }
     }
+    this.fallen.forEach((im, i) => { im.count = nf[i]; im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; });
     this.bodyIM.count = n; this.bodyIM.instanceMatrix.needsUpdate = true; if (this.bodyIM.instanceColor) this.bodyIM.instanceColor.needsUpdate = true;
     this.bloodIM.count = nb; this.bloodIM.instanceMatrix.needsUpdate = true; if (this.bloodIM.instanceColor) this.bloodIM.instanceColor.needsUpdate = true;
     // the living
