@@ -26,7 +26,7 @@ export class UI {
   private lastGroupTap = { t: 0, n: -1 };
   private ov: HTMLCanvasElement; private ctx: CanvasRenderingContext2D;
   private mm: HTMLCanvasElement; private mctx: CanvasRenderingContext2D; private mmBase: HTMLCanvasElement; private mmFog: HTMLCanvasElement; private mmFogImg: ImageData;
-  private hudT = 0; private mmT = 0; private panelKey = '';
+  private hudT = 0; private mmT = 0;
   private pings: { x: number; z: number; t: number; c: string }[] = [];
   private lastAlert = -999;
   private tmp = { x: 0, y: 0, ok: false };
@@ -37,6 +37,7 @@ export class UI {
   private pinch: { d: number; a: number; cx: number; cy: number } | null = null; private lpTimer = 0; private boxMode = false; private suppress = 0;
   private tipT = 0; private fpWas = false;
   private lastTap = { t: 0, x: 0, y: 0, u: null as Unit | null };
+  panelKey = '';
   private idleIdx = 0; private heat = 0; private lastCiv = -999; private showSupply = false;
 
   constructor(game: Game, r: Renderer, me: Team, audio: Audio, icons: Record<string, string>, cb: UICallbacks) {
@@ -324,6 +325,39 @@ export class UI {
     if (u) return { u, x: u.x, z: u.z, r: u.def.r, col, dash: false };
     const p = this.r.pick(this.mx, this.my); if (!p) return null;
     return { u: null, x: p.x, z: p.z, r, col, dash };
+  }
+  /**
+   * While placing something that can only go in particular places, mark every place it can go — but only in ground you have
+   * already scouted: free supply points for a Logistics Hub, your own hubs for a Rail Terminal, buildings that can be
+   * requisitioned, bridges that are down.
+   */
+  private sites(): { x: number; z: number; r: number; label: string }[] {
+    const def = this.placing, g = this.game, m = g.map, vis = this.me.vis, out: { x: number; z: number; r: number; label: string }[] = [];
+    if (!def) return out;
+    const seen = (x: number, z: number) => (vis[m.cellOf(x, z)] & 1) !== 0;
+    if (def.extract) { for (const s of m.spots) if (seen(s.x, s.z) && g.canPlace(def, s.cx - 1, s.cz - 1, this.me)) out.push({ x: s.x, z: s.z, r: 10, label: '+' + (s.rich * def.extract).toFixed(1) }); }
+    else if (def.reuse) { for (const c of m.civ) if (seen(c.x, c.z) && c.dmg < 2 && !c.owner && def.reuse.includes(c.kind)) out.push({ x: c.x, z: c.z, r: Math.max(c.fw, c.fh) * 4 + 3, label: '' }); }
+    else if (def.span) { for (const b of m.bridges) if (b.dead && seen(b.x, b.z)) out.push({ x: b.x, z: b.z, r: 22, label: b.name }); }
+    return out;
+  }
+  private drawSites(ctx: CanvasRenderingContext2D) {
+    if (!this.placing || this.r.fp) return;
+    const list = this.sites(); if (!list.length) return;
+    const r = this.r, p = this.tmp, map = this.game.map, t = performance.now() * 0.004, W = innerWidth, H = innerHeight;
+    ctx.save(); ctx.lineWidth = 2.5; ctx.shadowColor = '#5cff9a'; ctx.shadowBlur = 10; ctx.font = '600 12px system-ui, sans-serif'; ctx.textAlign = 'center';
+    for (const s of list) {
+      r.project(s.x, map.groundY(s.x, s.z) + 0.5, s.z, p); if (!p.ok || p.x < -80 || p.y < -80 || p.x > W + 80 || p.y > H + 80) continue;
+      const cx = p.x, cy = p.y, pulse = 0.5 + 0.5 * Math.sin(t + s.x * 0.05), rad = s.r * (1 + 0.1 * pulse);
+      ctx.strokeStyle = `rgba(92,255,154,${0.65 + 0.35 * pulse})`; ctx.fillStyle = `rgba(92,255,154,${0.1 + 0.08 * pulse})`;
+      ctx.beginPath(); let first = true;
+      for (let i = 0; i <= 28; i++) { const a = i / 28 * 6.283, x = s.x + Math.cos(a) * rad, z = s.z + Math.sin(a) * rad; r.project(x, map.groundY(x, z) + 0.5, z, p); if (!p.ok) { first = true; continue; } if (first) { ctx.moveTo(p.x, p.y); first = false; } else ctx.lineTo(p.x, p.y); }
+      ctx.fill(); ctx.stroke();
+      // a beacon above the spot so it reads from far out and behind trees
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - 30 - 6 * pulse); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx - 6, cy - 34 - 6 * pulse); ctx.lineTo(cx, cy - 26 - 6 * pulse); ctx.lineTo(cx + 6, cy - 34 - 6 * pulse); ctx.stroke();
+      if (s.label) { ctx.shadowBlur = 0; ctx.fillStyle = 'rgba(0,0,0,0.65)'; const tw = ctx.measureText(s.label).width; ctx.fillRect(cx - tw / 2 - 5, cy - 56 - 6 * pulse, tw + 10, 17); ctx.fillStyle = '#9dffc0'; ctx.fillText(s.label, cx, cy - 43 - 6 * pulse); ctx.shadowBlur = 10; }
+    }
+    ctx.restore();
   }
   /** do the selected units include anything of mine that can shoot? */
   private armed() { for (const u of this.selected) if (u.team === this.me && !u.dead && u.def.weapons.length) return true; return false; }
@@ -730,6 +764,7 @@ export class UI {
       const c = r.cam; ctx.fillText(`WHOT  FOV ${(c.dist / 12).toFixed(0)}  ALT ${(c.dist * Math.sin(c.pitch) * 3).toFixed(0)} m  HDG ${(((-c.yaw * 57.3) % 360 + 360) % 360).toFixed(0).padStart(3, '0')}`, 80, 96);
       ctx.fillText(`50.${(4500 - c.z * 0.4).toFixed(0)}N 030.${(5200 + c.x * 0.4).toFixed(0)}E   ${g.date.toISOString().slice(0, 10)}  REC ●`, 80, 114);
     }
+    this.drawSites(ctx);
     this.drawHover(ctx);
     const d = this.drag;
     if (d && d.on) {
@@ -958,6 +993,7 @@ export class UI {
     for (let i = 0; i < n * n; i++) { fd[i * 4 + 3] = vis[i] & 2 ? 0 : vis[i] & 1 ? 110 : 235; }
     this.mmFog.getContext('2d')!.putImageData(this.mmFogImg, 0, 0);
     ctx.drawImage(this.mmFog, 0, 0, W, W);
+    if (this.placing) { const pl = 3 + 2 * (0.5 + 0.5 * Math.sin(performance.now() * 0.006)); ctx.strokeStyle = '#5cff9a'; ctx.lineWidth = 1.5; for (const s of this.sites()) { ctx.beginPath(); ctx.arc(s.x * k, s.z * k, pl, 0, 6.283); ctx.stroke(); } }
     for (const s of m.spots) if (!s.taken && (vis[m.cellOf(s.x, s.z)] & 1)) { ctx.fillStyle = '#dfe8f2'; ctx.fillRect(s.x * k - 1, s.z * k - 1, 2, 2); }
     for (const u of g.units) {
       if (u.dead || u.inFactory || u.def.neutral) continue;

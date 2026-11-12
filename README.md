@@ -88,6 +88,17 @@ Modern Armour ─── Western Arms Packages (Ukraine) / Thermobaric & Hyperson
 The Space Programme unlocks the **Launch Complex**: a recon satellite reveals the whole map on radar and spots every
 enemy structure; a guidance satellite cuts artillery dispersion by 60%.
 
+## Opening
+
+A card with these orders appears when a battle starts (tick "don't show again" to stop it; it is also under Menu).
+
+1. Two Logistics Hubs on the nearest supply points — supplies are the bottleneck all game
+2. Two Diesel Generators — hubs and factories all draw power
+3. Barracks, then two engineers and some infantry
+4. Two more hubs, more generators as the power bar demands
+5. Design Bureau, and start research (FPV Drone Warfare or Modern Armour first)
+6. Motor Pool, then a Field Repair Depot and anti-aircraft cover
+
 ## Controls
 
 - **Click an enemy** with armed units selected to attack it (it highlights under the pointer; Alt-click inspects instead). When it is destroyed they fight on against nearby enemies

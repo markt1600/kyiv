@@ -112,7 +112,23 @@
   </div>
 
   <div id="rotate"><div><b>Rotate your device</b><span>KYIV plays in landscape</span></div></div>
-  <div id="pause" class="hidden"><div class="menu-card small"><h2>Paused</h2><label class="vol">Music <input id="volmusic" type="range" min="0" max="100"></label><label class="vol">Effects <input id="volsfx" type="range" min="0" max="100"></label><button id="btnResume">Resume</button><button id="btnQuit" class="ghost">Abandon battle</button></div></div>
+  <div id="guide" class="hidden"><div class="menu-card guide-card">
+    <div class="g-kick">Opening orders</div>
+    <h2 id="guideTitle"></h2>
+    <ol>
+      <li><b>2 Logistics Hubs</b> on the nearest supply points (they light up green when you pick the icon). Supplies are your bottleneck all game.</li>
+      <li><b>2 Diesel Generators.</b> Every hub and factory draws power; if the yellow bar empties, everything slows.</li>
+      <li><b>Barracks</b>, then queue 2 <b>engineers</b> so construction no longer depends on the command post, and some infantry.</li>
+      <li><b>2 more Logistics Hubs</b> and another generator or two. Keep both bars from sitting at full or at zero.</li>
+      <li><b>Design Bureau</b> and start researching — <i>FPV Drone Warfare</i> or <i>Modern Armour</i> first.</li>
+      <li><b>Motor Pool</b> for tanks and artillery, then a <b>Field Repair Depot</b> and an anti-aircraft gun near your base.</li>
+    </ol>
+    <p class="g-tip" id="guideSide"></p>
+    <p class="g-tip">Placements queue up: pick a building once and click as many spots as you like. The command post is already selected.</p>
+    <label class="g-chk"><input type="checkbox" id="guideHide"> Don’t show this again</label>
+    <button id="btnGuide">Understood</button>
+  </div></div>
+  <div id="pause" class="hidden"><div class="menu-card small"><h2>Paused</h2><label class="vol">Music <input id="volmusic" type="range" min="0" max="100"></label><label class="vol">Effects <input id="volsfx" type="range" min="0" max="100"></label><button id="btnResume">Resume</button><button id="btnShowGuide" class="ghost">Opening orders</button><button id="btnQuit" class="ghost">Abandon battle</button></div></div>
   <div id="end" class="hidden"><div class="menu-card small"><h2 id="endTitle"></h2><div id="endStats"></div><button id="btnAgain">Main menu</button><button id="btnWatch" class="ghost">Keep watching</button></div></div>
 
   <script type="module" src="/src/main.ts"></script>

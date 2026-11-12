@@ -143,11 +143,15 @@ function start() {
   const r = new Renderer(canvas, game, me, opts.gfx);
   const ses: Session = { game, r, ui: null as any, ais: game.teams.filter(t => t.ai).map(t => new AI(game, t)), me, raf: 0, paused: false, speed: 1, ended: false };
   ses.ui = new UI(game, r, me, audio, icons, {
-    pause: () => { if (ses.ended && !$('end').classList.contains('hidden')) return; ses.paused = !ses.paused; $('pause').classList.toggle('hidden', !ses.paused); },
+    pause: () => { if (ses.ended && !$('end').classList.contains('hidden')) return; if (!$('guide').classList.contains('hidden')) return; ses.paused = !ses.paused; $('pause').classList.toggle('hidden', !ses.paused); },
     speed: d => { ses.speed = Math.max(0, Math.min(SPEEDS.length - 1, ses.speed + d)); $('spdVal').textContent = SPEEDS[ses.speed] + '×'; },
   });
   $('spdVal').textContent = '1×';
   S = ses;
+  // start with the command post selected, so its build menu is the first thing on screen
+  if (me.prime) { ses.ui.selected.add(me.prime); ses.ui.panelKey = ''; }
+  let seenGuide = false; try { seenGuide = localStorage.getItem('kyiv-guide') === 'off'; } catch { /* ignore */ }
+  if (!seenGuide) showGuide(ses);
   backdrop.stop();
   $('menu').classList.add('hidden'); $('hud').classList.remove('hidden'); $('end').classList.add('hidden'); $('pause').classList.add('hidden');
   ses.ui.toast(side ? 'Hostomel. Your columns are staged north-west of the Irpin. Take Kyiv.' : 'Kyiv. The invasion has begun. Hold the capital.');
@@ -171,6 +175,21 @@ function start() {
   ses.raf = requestAnimationFrame(loop);
 }
 
+/** the opening-orders card: pauses the battle until it is dismissed */
+function showGuide(ses: Session) {
+  const side = ses.me.fac;
+  $('guideTitle').textContent = side ? 'Take Kyiv — build while your column holds the line' : 'Hold Kyiv — build before their armour arrives';
+  $('guideSide').innerHTML = side
+    ? '<b>Russia:</b> you start with tanks and infantry already forward. Use them to screen your base and scout the Irpin bridges, but do not throw them away before your factories are running. Every crossing is a chokepoint: bring artillery before you force one.'
+    : '<b>Ukraine:</b> their armoured column comes down the roads from the north-west within minutes. Keep your Javelin teams between it and your base, add an MG bunker on that side early, and remember your aid income lasts only while the city’s civilians do.';
+  ses.paused = true; $('guide').classList.remove('hidden'); $('pause').classList.add('hidden');
+}
+$('btnGuide').onclick = () => {
+  if (($('guideHide') as HTMLInputElement).checked) { try { localStorage.setItem('kyiv-guide', 'off'); } catch { /* ignore */ } }
+  $('guide').classList.add('hidden'); if (S) S.paused = false;
+};
+$('btnShowGuide').onclick = () => { if (S) showGuide(S); };
+
 function showEnd(ses: Session) {
   if (S !== ses) return;
   audio.music?.finale(!ses.me.dead);
@@ -189,7 +208,7 @@ function quit() {
   cancelAnimationFrame(S.raf); S.ui.dispose(); S.r.dispose(); S = null;
   audio.music?.stop(); audio.music?.start(); backdrop.start();
   setTimeout(startAttract, 50);
-  $('hud').classList.add('hidden'); $('pause').classList.add('hidden'); $('end').classList.add('hidden'); $('menu').classList.remove('hidden');
+  $('hud').classList.add('hidden'); $('pause').classList.add('hidden'); $('guide').classList.add('hidden'); $('end').classList.add('hidden'); $('menu').classList.remove('hidden');
   const c = ($('overlay') as HTMLCanvasElement); c.getContext('2d')!.clearRect(0, 0, c.width, c.height);
   // fresh GL canvas for the next battle
   const old = $('gl'), nw = document.createElement('canvas'); nw.id = 'gl'; old.replaceWith(nw);
