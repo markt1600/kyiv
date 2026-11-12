@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0b0d0c" />
   <title>KYIV — Defence of the Capital</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b1118'/%3E%3Cpath d='M16 4l10 6v12l-10 6-10-6V10z' fill='none' stroke='%232f7de0' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%23ffd500'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/src/style.css" />
@@ -32,6 +35,7 @@
       <button id="btnPause">Menu</button>
     </div>
     <div id="toasts"></div>
+    <div id="mtools"><button data-k="h">HQ</button><button data-k="Tab">Builder</button><button data-a="army">Army</button><button data-a="box">Box</button><button data-k="v">Supply</button><button data-k="t">Thermal</button><button data-a="clear">Clear</button></div>
     <div id="modeHint"></div>
     <div id="bottom">
       <div id="minimapWrap"><canvas id="minimap" width="232" height="232"></canvas></div>
@@ -86,7 +90,14 @@
           <p>A <b>Design Bureau</b> researches the ladder: FPV drones → strike drones → supersonic UCAVs, modern armour → cruise missiles, air defence, electronic warfare, and finally a <b>Launch Complex</b> for satellites.</p>
           <p><b>Seasons matter.</b> The calendar runs through the year. In the thaw, mud swallows anything off the roads. In winter, troops out of reach of a base (dashed circles, <b>V</b>) freeze and armour crawls. You can <b>requisition</b> city buildings as cheap, fragile forward bases.</p>
           <p><b>Civilians</b> live in the city. Ukraine receives aid while they survive; whichever side kills them loses supply income. Ruins, craters, wrecks and the dead stay where they fall.</p>
-          <ul>
+          <ul class="touchhelp">
+            <li><b>Tap</b> your unit to select it · <b>double-tap</b> to select all of that type on screen</li>
+            <li>With units selected, <b>tap</b> ground to move, an enemy to attack, a wreck to salvage</li>
+            <li><b>Drag</b> to pan · <b>pinch</b> to zoom · <b>twist</b> to rotate</li>
+            <li><b>Long-press then drag</b> (or the <b>Box</b> button) to box-select · <b>Army</b> selects every combat unit</li>
+            <li>Tap a build icon, then drag to position it and release · <b>long-press</b> a queue icon to remove one</li>
+          </ul>
+          <ul class="keyhelp">
             <li><b>Left-click / drag</b> select · <b>double-click</b> all of type · <b>Ctrl+1-9</b> / <b>1-9</b> groups</li>
             <li><b>Right-click</b> move / attack / assist / repair / reclaim wreck / set rally</li>
             <li><b>Shift</b> queue orders or place many buildings (drag for a row)</li>
@@ -99,6 +110,7 @@
     </div>
   </div>
 
+  <div id="rotate"><div><b>Rotate your device</b><span>KYIV plays in landscape</span></div></div>
   <div id="pause" class="hidden"><div class="menu-card small"><h2>Paused</h2><label class="vol">Music <input id="volmusic" type="range" min="0" max="100"></label><label class="vol">Effects <input id="volsfx" type="range" min="0" max="100"></label><button id="btnResume">Resume</button><button id="btnQuit" class="ghost">Abandon battle</button></div></div>
   <div id="end" class="hidden"><div class="menu-card small"><h2 id="endTitle"></h2><div id="endStats"></div><button id="btnAgain">Main menu</button><button id="btnWatch" class="ghost">Keep watching</button></div></div>
 

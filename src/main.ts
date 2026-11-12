@@ -13,8 +13,13 @@ const backdrop = new MenuBackdrop($('menuBg') as HTMLCanvasElement);
 backdrop.start();
 const iconSets: (Record<string, string> | null)[] = [null, null];
 
-const opts = { side: 0, diff: 1, size: 1, date: 0, gfx: 2, seed: Math.floor(Math.random() * 99999) };
-try { Object.assign(opts, JSON.parse(localStorage.getItem('kyiv-opts') || '{}'), { seed: opts.seed }); } catch { /* ignore */ }
+// phones and tablets get the touch interface and lighter defaults automatically
+const TOUCH = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window) && window.matchMedia('(pointer: coarse)').matches;
+const PHONE = TOUCH && Math.min(window.screen.width, window.screen.height) < 600;
+const MOBILE = TOUCH || new URLSearchParams(location.search).has('mobile');
+if (MOBILE) { document.body.classList.add('mobile'); if (PHONE) document.body.classList.add('phone'); Renderer.mobile = true; }
+const opts = { side: 0, diff: 1, size: MOBILE ? 0 : 1, date: 0, gfx: PHONE ? 0 : MOBILE ? 1 : 2, seed: Math.floor(Math.random() * 99999) };
+try { Object.assign(opts, JSON.parse(localStorage.getItem((MOBILE ? 'kyiv-opts-m' : 'kyiv-opts')) || '{}'), { seed: opts.seed }); } catch { /* ignore */ }
 
 function seg(id: string, labels: string[], key: keyof typeof opts) {
   const el = $(id); el.innerHTML = '';
@@ -31,7 +36,8 @@ sideEls.forEach((el, i) => { el.onclick = () => { setSide(i); audio.init(); appl
 setSide(opts.side ? 1 : 0);
 seg('optSize', ['Small', 'Medium', 'Large'], 'size');
 seg('optDate', START_DATES.map(d => d[0]), 'date');
-seg('optGfx', ['Low', 'Medium', 'High'], 'gfx');
+if (MOBILE) opts.gfx = Math.min(opts.gfx, 1);
+seg('optGfx', MOBILE ? ['Low', 'Medium'] : ['Low', 'Medium', 'High'], 'gfx');
 // every battle gets a fresh random seed; `?seed=N` in the address pins one for reproducing a game
 const fixedSeed = parseInt(new URLSearchParams(location.search).get('seed') || '', 10);
 
@@ -64,7 +70,7 @@ function stopAttract() {
   if (a.r) { a.r.dispose(); const old = $('gl'), nw = document.createElement('canvas'); nw.id = 'gl'; old.replaceWith(nw); }
 }
 function startAttract() {
-  if (A || S) return;
+  if (A || S || MOBILE) return; // on battery the title screen shows the montage only
   let game: Game;
   try { game = new Game({ n: 128, seed: Math.floor(Math.random() * 99999), start: 1, players: [{ ai: true, level: 2, ally: 0 }, { ai: true, level: 2, ally: 1 }] }); } catch { return; }
   const a: Attract = { game, r: null, ais: game.teams.map(t => new AI(game, t)), raf: 0, hot: [], tx: 0, tz: 0, cut: 0, quiet: 0 };
@@ -121,9 +127,12 @@ startAttract();
 
 function start() {
   stopAttract();
+  if (MOBILE) { // take the whole screen, in landscape, where the browser allows it
+    try { const p = document.documentElement.requestFullscreen?.(); if (p) p.then(() => (screen.orientation as any)?.lock?.('landscape')?.catch?.(() => { /* not supported */ })).catch(() => { /* refused */ }); } catch { /* ignore */ }
+  }
   audio.init(); applyVol(); audio.music?.stop(); audio.music?.start();
   const seed = (fixedSeed > 0 ? fixedSeed : Math.floor(Math.random() * 99999) + 1) >>> 0;
-  try { localStorage.setItem('kyiv-opts', JSON.stringify(opts)); } catch { /* ignore */ }
+  try { localStorage.setItem((MOBILE ? 'kyiv-opts-m' : 'kyiv-opts'), JSON.stringify(opts)); } catch { /* ignore */ }
   const side = opts.side ? 1 : 0;
   const players = [0, 1].map(i => ({ ai: i !== side, level: opts.diff, ally: i }));
   const game = new Game({ n: [128, 152, 184][opts.size], seed, start: opts.date, players });
@@ -147,6 +156,7 @@ function start() {
   let last = performance.now(), acc = 0;
   const loop = (now: number) => {
     ses.raf = requestAnimationFrame(loop);
+    if (PHONE && now - last < 30) return; // 30 fps is plenty on a phone and halves the heat
     const dt = Math.max(0, Math.min(0.1, (now - last) / 1000)); last = now;
     if (!ses.paused) {
       acc += dt * SPEEDS[ses.speed];
@@ -186,6 +196,8 @@ function quit() {
 }
 
 $('btnStart').onclick = start;
+// a backgrounded tab should not keep fighting (or draining the battery)
+document.addEventListener('visibilitychange', () => { if (document.hidden && S && !S.paused && !S.ended) { S.paused = true; $('pause').classList.remove('hidden'); } });
 $('btnResume').onclick = () => { if (S) { S.paused = false; $('pause').classList.add('hidden'); } };
 $('btnQuit').onclick = quit;
 $('btnAgain').onclick = quit;

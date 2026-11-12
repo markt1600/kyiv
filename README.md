@@ -96,6 +96,18 @@ enemy structure; a guidance satellite cuts artillery dispersion by 60%.
 - **V** supply ranges · **T** thermal drone view · **H** find command post · **Tab** idle builder
 - Arrows / screen edge / middle-drag pan · wheel zoom · **Z / X** rotate · **Space** pause · **+ / −** speed
 
+### Touch (phones and tablets)
+
+The page detects a touch device and switches to mobile mode on its own: touch controls, a toolbar in place of the
+hotkeys, a reflowed HUD, lighter graphics, and the montage instead of the live battle on the title screen. Add
+`?mobile` to the address to try it on a desktop.
+
+- **Tap** your unit to select · **double-tap** to select all of that type on screen
+- With units selected, **tap** ground to move, an enemy to attack, a wreck to salvage
+- **Drag** to pan · **pinch** to zoom · **twist** to rotate
+- **Long-press then drag**, or the **Box** button, to box-select · **Army** selects every combat unit
+- Tap a build icon, drag to position it, release to build · **long-press** a queue icon to remove one
+
 ## Run
 
 ```bash

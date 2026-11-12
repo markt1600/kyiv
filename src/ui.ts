@@ -31,6 +31,12 @@ export class UI {
   private lastAlert = -999;
   private tmp = { x: 0, y: 0, ok: false };
   private disposers: (() => void)[] = [];
+  /** touch device: gestures replace the mouse, hit targets are larger, an on-screen toolbar replaces the hotkeys */
+  mobile = document.body.classList.contains('mobile');
+  private tch: { x: number; y: number; lx: number; ly: number; t: number; moved: boolean; box: boolean } | null = null;
+  private pinch: { d: number; a: number; cx: number; cy: number } | null = null; private lpTimer = 0; private boxMode = false; private suppress = 0;
+  private tipT = 0;
+  private lastTap = { t: 0, x: 0, y: 0, u: null as Unit | null };
   private idleIdx = 0; private heat = 0; private lastCiv = -999; private showSupply = false;
 
   constructor(game: Game, r: Renderer, me: Team, audio: Audio, icons: Record<string, string>, cb: UICallbacks) {
@@ -118,7 +124,7 @@ export class UI {
       if (u.dead || !this.r.shown(u) || (filter && !filter(u))) continue;
       this.r.project(u.x, u.y + u.def.h * 0.4, u.z, p); if (!p.ok) continue;
       const dist = cam.position.distanceTo({ x: u.x, y: u.y, z: u.z } as any);
-      const rad = Math.max(11, u.def.r * f / dist * 1.1), d = Math.hypot(p.x - sx, p.y - sy);
+      const rad = Math.max(this.mobile ? 26 : 11, u.def.r * f / dist * 1.1), d = Math.hypot(p.x - sx, p.y - sy);
       if (d < rad && d < bd) { bd = d; best = u; }
     }
     return best;
@@ -176,17 +182,8 @@ export class UI {
       if (e.button !== 0) return;
       if (this.placing && this.placeStart) { this.commitPlace(e); this.placeStart = null; return; }
       const d = this.drag; this.drag = null; if (!d) return;
-      if (d.on) {
-        const x0 = Math.min(d.x, e.clientX), x1 = Math.max(d.x, e.clientX), y0 = Math.min(d.y, e.clientY), y1 = Math.max(d.y, e.clientY);
-        const p = this.tmp, mob: Unit[] = [], bld: Unit[] = [];
-        for (const u of this.game.units) {
-          if (u.team !== this.me || u.dead || u.inFactory) continue;
-          this.r.project(u.x, u.y + u.def.h * 0.3, u.z, p);
-          if (p.ok && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1) (u.def.cls === 'building' ? bld : mob).push(u);
-        }
-        const combat = mob.filter(u => !u.def.bp || u.def.commander);
-        this.select(mob.length ? (combat.length && combat.length < mob.length && !e.ctrlKey ? mob : mob) : bld, e.shiftKey);
-      } else {
+      if (d.on) this.boxSelect(d.x, d.y, e.clientX, e.clientY, e.shiftKey);
+      else {
         const u = this.unitAt(e.clientX, e.clientY);
         const now = performance.now();
         if (u && u.team === this.me && this.lastClick.u && this.lastClick.u.def === u.def && now - this.lastClick.t < 350) {
@@ -251,8 +248,9 @@ export class UI {
     });
     this.on(window, 'keyup', (e: KeyboardEvent) => { this.keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key); });
     this.on(window, 'blur', () => { this.keys.clear(); this.pan = null; this.drag = null; });
+    if (this.mobile) this.bindTouch(cv);
     // minimap
-    const mmv = (e: MouseEvent) => {
+    const mmv = (e: { clientX: number; clientY: number }) => {
       const b = this.mm.getBoundingClientRect(), S = this.game.map.size;
       return { x: clamp((e.clientX - b.left) / b.width, 0, 1) * S, z: clamp((e.clientY - b.top) / b.height, 0, 1) * S };
     };
@@ -266,6 +264,10 @@ export class UI {
     });
     this.on(window, 'mousemove', (e: MouseEvent) => { if (mmDown) { const p = mmv(e); this.r.cam.x = p.x; this.r.cam.z = p.z; } });
     this.on(window, 'mouseup', () => { mmDown = false; });
+    const mmTouch = (e: TouchEvent) => { e.preventDefault(); const t = e.touches[0]; if (!t) return; const p = mmv(t);
+      if (e.type === 'touchstart' && this.mode && this.mode !== 'guard' && this.mode !== 'repair' && this.mode !== 'reclaim') { this.game.moveGroup(this.mine(), p.x, p.z, this.mode as any, false); this.mode = null; this.panelKey = ''; return; }
+      this.r.cam.x = p.x; this.r.cam.z = p.z; };
+    this.on(this.mm, 'touchstart', mmTouch, { passive: false }); this.on(this.mm, 'touchmove', mmTouch, { passive: false });
     this.on($('btnPause'), 'click', () => this.cb.pause());
     this.on($('spdUp'), 'click', () => this.cb.speed(1));
     this.on($('spdDown'), 'click', () => this.cb.speed(-1));
@@ -285,9 +287,108 @@ export class UI {
     if (any) { this.audio.ui('order'); this.pings.push({ x, z, t: 0.6, c: '#60ff90' }); }
   }
 
+  private boxSelect(ax: number, ay: number, bx: number, by: number, add: boolean) {
+    const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx), y0 = Math.min(ay, by), y1 = Math.max(ay, by);
+    const p = this.tmp, mob: Unit[] = [], bld: Unit[] = [];
+    for (const u of this.game.units) {
+      if (u.team !== this.me || u.dead || u.inFactory) continue;
+      this.r.project(u.x, u.y + u.def.h * 0.3, u.z, p);
+      if (p.ok && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1) (u.def.cls === 'building' ? bld : mob).push(u);
+    }
+    this.select(mob.length ? mob : bld, add);
+  }
+
+  // ───────────── touch ─────────────
+  // one finger: tap to select or order, drag to pan, long-press then drag to box-select. two fingers: pan, pinch to zoom, twist to rotate.
+  private bindTouch(cv: HTMLElement) {
+    const PLACE_OFF = 64; // the building ghost sits above the fingertip so you can see it
+    const two = (e: TouchEvent) => { const a = e.touches[0], b = e.touches[1]; return { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1, a: Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX), cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2 }; };
+    const panBy = (dx: number, dy: number) => { const c = this.r.cam, k = c.dist * 0.0021, cs = Math.cos(c.yaw), sn = Math.sin(c.yaw); c.x -= (dx * cs + dy * sn) * k; c.z -= (-dx * sn + dy * cs) * k; };
+    this.on(cv, 'touchstart', (e: TouchEvent) => {
+      e.preventDefault(); this.audio.init(); clearTimeout(this.lpTimer);
+      if (e.touches.length >= 2) { this.tch = null; this.drag = null; this.pinch = two(e); return; }
+      const t = e.touches[0], x = t.clientX, y = t.clientY;
+      this.mx = x; this.my = this.placing ? y - PLACE_OFF : y; this.inside = false;
+      this.tch = { x, y, lx: x, ly: y, t: performance.now(), moved: false, box: this.boxMode };
+      if (this.tch.box) this.drag = { x, y, on: true };
+      else if (!this.placing && !this.mode) this.lpTimer = window.setTimeout(() => {
+        const tc = this.tch; if (!tc || tc.moved) return;
+        tc.box = true; this.drag = { x: tc.x, y: tc.y, on: true }; if (navigator.vibrate) navigator.vibrate(12);
+      }, 380);
+    }, { passive: false });
+    this.on(cv, 'touchmove', (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length >= 2) {
+        const n = two(e), p = this.pinch || n, c = this.r.cam;
+        c.dist = clamp(c.dist * p.d / n.d, 20, 1500);
+        let da = n.a - p.a; if (da > Math.PI) da -= 6.283; if (da < -Math.PI) da += 6.283; c.yaw -= da;
+        panBy(n.cx - p.cx, n.cy - p.cy); this.pinch = n; return;
+      }
+      const tc = this.tch, t = e.touches[0]; if (!tc || !t) return;
+      const x = t.clientX, y = t.clientY;
+      if (!tc.moved && Math.hypot(x - tc.x, y - tc.y) > 12) { tc.moved = true; if (!tc.box) clearTimeout(this.lpTimer); }
+      if (this.placing) { this.mx = x; this.my = y - PLACE_OFF; }
+      else if (tc.box) { this.mx = x; this.my = y; }
+      else if (tc.moved) panBy(x - tc.lx, y - tc.ly);
+      tc.lx = x; tc.ly = y;
+    }, { passive: false });
+    const end = (e: TouchEvent) => {
+      e.preventDefault(); clearTimeout(this.lpTimer);
+      if (e.touches.length) { this.pinch = e.touches.length >= 2 ? two(e) : null; this.tch = null; this.drag = null; return; }
+      this.pinch = null;
+      const tc = this.tch; this.tch = null; if (!tc) return;
+      if (this.placing) {
+        if (tc.moved || performance.now() - tc.t > 120) { const c = this.placeCell(this.mx, this.my); if (c) { this.placeStart = c; this.commitPlace({ clientX: this.mx, clientY: this.my, shiftKey: false }); this.placeStart = null; } }
+        else { const c = this.placeCell(tc.x, tc.y - 0); if (c) { this.mx = tc.x; this.my = tc.y; this.placeStart = c; this.commitPlace({ clientX: tc.x, clientY: tc.y, shiftKey: false }); this.placeStart = null; } }
+        return;
+      }
+      if (tc.box) { this.drag = null; if (tc.moved) this.boxSelect(tc.x, tc.y, tc.lx, tc.ly, false); this.setBox(false); return; }
+      if (!tc.moved) this.tap(tc.x, tc.y);
+    };
+    this.on(cv, 'touchend', end, { passive: false }); this.on(cv, 'touchcancel', end, { passive: false });
+    // on-screen toolbar standing in for the hotkeys
+    for (const b of Array.from(document.querySelectorAll('#mtools button')) as HTMLElement[]) this.on(b, 'click', () => {
+      const k = b.dataset.k, a = b.dataset.a; this.audio.init();
+      if (k) { window.dispatchEvent(new KeyboardEvent('keydown', { key: k })); window.dispatchEvent(new KeyboardEvent('keyup', { key: k })); }
+      else if (a === 'army') { this.select(this.game.units.filter(u => u.team === this.me && !u.dead && u.built && u.def.cls !== 'building' && u.def.weapons.length > 0 && !u.def.bp && !u.inFactory), false); this.toast(this.selected.size + ' combat units selected'); }
+      else if (a === 'box') this.setBox(!this.boxMode);
+      else if (a === 'clear') { this.select([], false); this.setBox(false); }
+      b.blur();
+    });
+  }
+  private setBox(on: boolean) { this.boxMode = on; const b = document.querySelector('#mtools [data-a="box"]'); if (b) b.classList.toggle('on', on); if (on) this.toast('Drag a box around your units'); }
+  /** a tap does what both mouse buttons do: picks your own units, and otherwise gives the selected ones their order */
+  private tap(x: number, y: number) {
+    if (this.mode) { this.modeClick({ clientX: x, clientY: y, shiftKey: false }); return; }
+    const u = this.unitAt(x, y), now = performance.now(), lt = this.lastTap, mine = this.mine();
+    const dbl = !!u && u.team === this.me && lt.u !== null && lt.u.def === u.def && now - lt.t < 380 && Math.hypot(x - lt.x, y - lt.y) < 40;
+    this.lastTap = { t: now, x, y, u };
+    if (dbl && u) {
+      const p = this.tmp, all: Unit[] = [];
+      for (const o of this.game.units) if (o.team === this.me && o.def === u.def && !o.dead) { this.r.project(o.x, o.y, o.z, p); if (p.ok && p.x > 0 && p.y > 0 && p.x < innerWidth && p.y < innerHeight) all.push(o); }
+      this.select(all, false); return;
+    }
+    if (u && u.team === this.me) {
+      // builders tapping something unfinished or damaged go and work on it; any other tap on your own unit selects it
+      if (mine.some(m => m.def.bp && !m.def.factory && m !== u) && !this.selected.has(u) && (!u.built || u.hp < u.def.hp * 0.98) && !u.inFactory) this.rightClick(x, y, false);
+      else this.select([u], false);
+      return;
+    }
+    if (mine.length) { this.rightClick(x, y, false); return; }
+    this.select(u ? [u] : [], false);
+  }
+  private longPress(b: HTMLElement) {
+    if (!this.mobile) return;
+    let tm = 0;
+    b.addEventListener('touchstart', () => { tm = window.setTimeout(() => { this.suppress = performance.now() + 700; if (navigator.vibrate) navigator.vibrate(10); b.onmousedown!({ button: 2, shiftKey: false, isTrusted: false, preventDefault() { /* synthetic */ } } as any); }, 480); }, { passive: true });
+    const cancel = () => clearTimeout(tm);
+    b.addEventListener('touchend', cancel); b.addEventListener('touchmove', cancel); b.addEventListener('touchcancel', cancel);
+  }
+
   private rightClick(sx: number, sy: number, shift: boolean) {
     const us = this.mine(); if (!us.length) return;
-    const g = this.game, hit = this.unitAt(sx, sy);
+    const g = this.game; let hit = this.unitAt(sx, sy);
+    if (hit && hit.def.neutral) hit = null; // crossing a bridge is a move order; bringing one down takes an explicit Attack
     if (hit && hit.team.ally !== this.me.ally) {
       for (const u of us) if (u.def.weapons.length) g.give(u, { type: 'attack', target: hit, x: hit.x, z: hit.z }, shift);
       this.audio.ui('order'); this.pings.push({ x: hit.x, z: hit.z, t: 0.6, c: '#ff5040' }); return;
@@ -308,7 +409,7 @@ export class UI {
     const p = this.r.pick(sx, sy); if (p) this.groundOrder(p.x, p.z, shift);
   }
 
-  private modeClick(e: MouseEvent) {
+  private modeClick(e: { clientX: number; clientY: number; shiftKey: boolean }) {
     const us = this.mine(), g = this.game, m = this.mode, shift = e.shiftKey;
     const p = this.r.pick(e.clientX, e.clientY);
     if (m === 'fight' || m === 'patrol' || m === 'move') {
@@ -376,7 +477,7 @@ export class UI {
     for (let i = 0; i <= Math.min(n, 15); i++) out.push({ cx: a.cx + (horiz ? Math.sign(dx) * i * step : 0), cz: a.cz + (horiz ? 0 : Math.sign(dz) * i * step) });
     return out;
   }
-  private commitPlace(e: MouseEvent) {
+  private commitPlace(e: { clientX: number; clientY: number; shiftKey: boolean }) {
     const def = this.placing!, end = this.placeCell(e.clientX, e.clientY); if (!end) return;
     const cells = this.rowCells(this.placeStart!, end, def).filter(c => this.free(def, c.cx, c.cz));
     const bs = this.mine().filter(u => u.def.builds.includes(def.id) && !u.def.factory);
@@ -392,7 +493,7 @@ export class UI {
     // camera keys + edge scroll
     let dx = 0, dz = 0;
     if (k.has('ArrowLeft')) dx -= 1; if (k.has('ArrowRight')) dx += 1; if (k.has('ArrowUp')) dz -= 1; if (k.has('ArrowDown')) dz += 1;
-    if (this.inside && !this.pan && document.hasFocus()) {
+    if (this.inside && !this.pan && !this.mobile && document.hasFocus()) {
       if (this.mx <= 2) dx -= 1; else if (this.mx >= innerWidth - 3) dx += 1;
       if (this.my <= 2) dz -= 1; else if (this.my >= innerHeight - 3) dz += 1;
     }
@@ -419,8 +520,8 @@ export class UI {
     } else this.r.setGhost(null);
     $('gl').style.cursor = this.placing ? 'cell' : this.mode ? 'crosshair' : 'default';
     this.drawOverlay(dt);
-    this.hudT -= dt; if (this.hudT <= 0) { this.hudT = 0.2; this.refreshHud(paused); }
-    this.mmT -= dt; if (this.mmT <= 0) { this.mmT = 0.1; this.drawMinimap(); }
+    this.hudT -= dt; if (this.hudT <= 0) { this.hudT = this.mobile ? 0.3 : 0.2; this.refreshHud(paused); }
+    this.mmT -= dt; if (this.mmT <= 0) { this.mmT = this.mobile ? 0.25 : 0.1; this.drawMinimap(); }
   }
 
   private drawOverlay(dt: number) {
@@ -545,8 +646,8 @@ export class UI {
     const cv = $('civ'); cv.textContent = 'Civilians ' + g.civAlive + '/' + g.civTotal + (me.condemn ? ' · sanctions −' + Math.round(Math.min(0.4, me.condemn * 0.015) * 100) + '%' : me.fac === 0 ? ' · aid +' + me.aid.toFixed(1) : '');
     cv.className = me.condemn ? 'bad' : '';
     $('wind').textContent = 'Wind ' + Math.round(g.wind * 100) + '%' + (me.sat ? ' · SAT' + (me.sat & 2 ? '+GPS' : '') : '');
-    $('modeHint').textContent = this.placing ? (this.placing.span ? 'Click a destroyed bridge to lay a ' : this.placing.reuse ? 'Requisition a building for ' : 'Place ') + nm(this.placing, me.fac) + ' — Shift: multiple · drag: row · right-click: cancel'
-      : this.mode ? ({ fight: 'Attack-move', patrol: 'Patrol', guard: 'Guard', repair: 'Repair', reclaim: 'Salvage area', move: 'Move' } as any)[this.mode] + ' — click target' : '';
+    $('modeHint').textContent = this.placing && this.mobile ? (this.placing.span ? 'Tap a destroyed bridge: ' : this.placing.reuse ? 'Tap a building to requisition: ' : 'Drag to position, release to build: ') + nm(this.placing, me.fac) : this.placing ? (this.placing.span ? 'Click a destroyed bridge to lay a ' : this.placing.reuse ? 'Requisition a building for ' : 'Place ') + nm(this.placing, me.fac) + ' — Shift: multiple · drag: row · right-click: cancel'
+      : this.mode ? ({ fight: 'Attack-move', patrol: 'Patrol', guard: 'Guard', repair: 'Repair', reclaim: 'Salvage area', move: 'Move' } as any)[this.mode] + (this.mobile ? ' — tap target' : ' — click target') : '';
     this.refreshPanel();
   }
 
@@ -579,7 +680,7 @@ export class UI {
           b.className = 'bbtn' + (this.placing === def ? ' sel' : '') + (locked ? ' locked' : ''); b.dataset.id = id;
           b.innerHTML = `<img src="${this.icons[id] || ''}" draggable="false"><span class="cnt"></span>${locked ? '<span class="lock">🔒</span>' : def.reuse ? '<span class="t2">REQ</span>' : def.tier > 1 ? '<span class="t2">T' + def.tier + '</span>' : ''}<span class="lbl">${nm(def, fac)}</span>`;
           b.onmousedown = e => {
-            e.preventDefault(); this.audio.init();
+            e.preventDefault(); if (e.isTrusted && performance.now() < this.suppress) return; this.audio.init();
             if (locked) { this.audio.ui('error'); this.toast('Requires research: ' + TECHS[def.req].name, 'bad'); return; }
             if (builder.def.factory) {
               const facs = this.mine().filter(u => u.def === builder.def);
@@ -592,7 +693,7 @@ export class UI {
           };
           b.oncontextmenu = e => e.preventDefault();
           b.onmouseenter = () => this.showTip(def, b); b.onmouseleave = () => $('tooltip').classList.add('hidden');
-          grid.appendChild(b);
+          grid.appendChild(b); this.longPress(b);
         }
         if (lab) for (const t of TECH_LIST) {
           if (t.at !== lab.def.lab || t.fac !== undefined && t.fac !== fac) continue;
@@ -600,14 +701,14 @@ export class UI {
           b.className = 'bbtn tech' + (done ? ' done' : can ? '' : ' locked'); b.dataset.tech = t.id;
           b.innerHTML = `<span class="tn">${t.name}</span><span class="cnt"></span>${done ? '<span class="lock">✓</span>' : can ? '' : '<span class="lock">🔒</span>'}`;
           b.onmousedown = e => {
-            e.preventDefault(); this.audio.init();
+            e.preventDefault(); if (e.isTrusted && performance.now() < this.suppress) return; this.audio.init();
             if (e.button === 2) { for (const l of this.mine()) { const i = l.resQ.indexOf(t); if (i >= 0) { l.resQ.splice(i, 1); if (i === 0) l.resP = 0; } } this.audio.ui('click'); return; }
             if (done || !can || g.researching(this.me, t)) { this.audio.ui('error'); if (!done && !can) this.toast('Requires: ' + t.req.filter(r => !this.me.tech.has(r)).map(r => TECHS[r].name).join(', '), 'bad'); return; }
             lab.resQ.push(t); this.audio.ui('click');
           };
           b.oncontextmenu = e => e.preventDefault();
           b.onmouseenter = () => this.showTechTip(t, b); b.onmouseleave = () => $('tooltip').classList.add('hidden');
-          grid.appendChild(b);
+          grid.appendChild(b); this.longPress(b);
         }
       }
       $('tooltip').classList.add('hidden');
@@ -628,7 +729,7 @@ export class UI {
     if (sel.length === 1) {
       const u = sel[0], d = u.def, w = d.weapons[0];
       let st = '';
-      if (u.team !== this.me) st += d.neutral ? '<span><b>Right-click with armed units to bring it down</b></span>' : `<span>Owner <b style="color:${hex(TEAM_COLORS[u.team.id])}">enemy</b></span>`;
+      if (u.team !== this.me) st += d.neutral ? '<span><b>To bring it down: Attack (A), then pick the bridge</b></span>' : `<span>Owner <b style="color:${hex(TEAM_COLORS[u.team.id])}">enemy</b></span>`;
       if (!u.built) st += `<span>Building <b>${Math.floor(u.progress * 100)}%</b></span>`;
       if (w) st += `<span>Damage <b>${Math.round(d.weapons.reduce((a, x) => a + x.dmg * (x.burst || 1) / x.reload, 0))}/s</b></span><span>Range <b>${w.range}</b></span>`;
       if (d.speed) st += `<span>Speed <b>${d.speed}</b></span>`;
@@ -669,6 +770,7 @@ export class UI {
   private placeTip(el: HTMLElement) {
     const t = $('tooltip');
     t.classList.remove('hidden');
+    if (this.mobile) { clearTimeout(this.tipT); this.tipT = window.setTimeout(() => t.classList.add('hidden'), 2800); }
     const b = el.getBoundingClientRect(), tb = t.getBoundingClientRect();
     t.style.left = clamp(b.left + b.width / 2 - tb.width / 2, 4, innerWidth - tb.width - 4) + 'px'; t.style.top = (b.top - tb.height - 6) + 'px';
   }

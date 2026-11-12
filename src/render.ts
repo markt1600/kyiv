@@ -286,11 +286,14 @@ export class Renderer {
   onEvent: ((e: any, vis: boolean) => void) | null = null;
   private ray = new THREE.Raycaster();
 
+  /** set once at start-up on phones and tablets: lower resolution, fewer particles, smaller shadow map, no MSAA */
+  static mobile = false;
   constructor(canvas: HTMLCanvasElement, game: Game, me: Team, quality: number) {
+    if (Renderer.mobile) quality = Math.min(quality, 1);
     this.game = game; this.map = game.map; this.me = me; this.quality = quality;
     const map = this.map, bio = map.biome;
     const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 0, powerPreference: 'high-performance' });
-    r.setPixelRatio(Math.min(window.devicePixelRatio, quality >= 2 ? 2 : 1.25));
+    r.setPixelRatio(Renderer.mobile ? Math.min(window.devicePixelRatio, quality >= 1 ? 1.5 : 1.1) : Math.min(window.devicePixelRatio, quality >= 2 ? 2 : 1.25));
     r.shadowMap.enabled = quality >= 1; r.shadowMap.type = THREE.PCFSoftShadowMap;
     r.localClippingEnabled = true;
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.1;
@@ -314,7 +317,7 @@ export class Renderer {
     const sk2 = new THREE.Mesh(this.sky.geometry, sm); sk2.scale.setScalar(3400); this.skyEnv.add(sk2);
     this.hemi = new THREE.HemisphereLight(bio.sky, 0x30281e, 0.95); this.scene.add(this.hemi);
     const sun = this.sun = new THREE.DirectionalLight(bio.sun, bio.lava ? 1.6 : 2.4);
-    sun.castShadow = quality >= 1; sun.shadow.mapSize.set(quality >= 2 ? 4096 : 2048, quality >= 2 ? 4096 : 2048); sun.shadow.radius = 2.2; sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.6;
+    sun.castShadow = quality >= 1; sun.shadow.mapSize.set(Renderer.mobile ? 1024 : quality >= 2 ? 4096 : 2048, Renderer.mobile ? 1024 : quality >= 2 ? 4096 : 2048); sun.shadow.radius = 2.2; sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.6;
     this.scene.add(sun, sun.target);
 
     const plate = platingTextures();
@@ -510,7 +513,7 @@ export class Renderer {
       }
     }
 
-    this.scenery = new Scenery(this.scene, map, quality, map.seed);
+    this.scenery = new Scenery(this.scene, map, Renderer.mobile ? 0 : quality, map.seed);
     this.world = new World(this.scene, map, quality);
     this.skyDay.set(bio.sky);
     // dynamic lights (fixed pool so shaders never recompile)
@@ -566,7 +569,8 @@ export class Renderer {
     const sg = new THREE.PlaneGeometry(2, 2); sg.rotateX(-Math.PI / 2);
     this.scorchIM = addIM(sg, new THREE.MeshBasicMaterial({ map: scTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }), 700, 3);
 
-    this.fire = new Particles(quality >= 1 ? 9000 : 4000, true); this.smoke = new Particles(quality >= 1 ? 4000 : 1500, false);
+    const pk = Renderer.mobile ? 0.45 : 1;
+    this.fire = new Particles(Math.round((quality >= 1 ? 9000 : 4000) * pk), true); this.smoke = new Particles(Math.round((quality >= 1 ? 4000 : 1500) * pk), false);
     this.scene.add(this.smoke.pts, this.fire.pts);
 
     this.ghost = new THREE.Group(); this.ghost.visible = false; this.scene.add(this.ghost);
@@ -576,7 +580,7 @@ export class Renderer {
     this.rangeRing.visible = false; this.rangeRing.renderOrder = 9; this.scene.add(this.rangeRing);
 
     if (quality >= 1) {
-      const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4 });
+      const rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: Renderer.mobile ? 0 : 4 });
       this.composer = new EffectComposer(r, rt);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
       if (quality >= 2) {
