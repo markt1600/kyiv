@@ -32,8 +32,8 @@ setSide(opts.side ? 1 : 0);
 seg('optSize', ['Small', 'Medium', 'Large'], 'size');
 seg('optDate', START_DATES.map(d => d[0]), 'date');
 seg('optGfx', ['Low', 'Medium', 'High'], 'gfx');
-const seedEl = $('optSeed') as HTMLInputElement; seedEl.value = '' + opts.seed;
-$('seedRnd').onclick = () => { seedEl.value = '' + Math.floor(Math.random() * 99999); };
+// every battle gets a fresh random seed; `?seed=N` in the address pins one for reproducing a game
+const fixedSeed = parseInt(new URLSearchParams(location.search).get('seed') || '', 10);
 
 const vol = { music: 0.42, sfx: 0.5 };
 try { Object.assign(vol, JSON.parse(localStorage.getItem('kyiv-vol') || '{}')); } catch { /* ignore */ }
@@ -122,7 +122,7 @@ startAttract();
 function start() {
   stopAttract();
   audio.init(); applyVol(); audio.music?.stop(); audio.music?.start();
-  const seed = (parseInt(seedEl.value, 10) || 1) >>> 0;
+  const seed = (fixedSeed > 0 ? fixedSeed : Math.floor(Math.random() * 99999) + 1) >>> 0;
   try { localStorage.setItem('kyiv-opts', JSON.stringify(opts)); } catch { /* ignore */ }
   const side = opts.side ? 1 : 0;
   const players = [0, 1].map(i => ({ ai: i !== side, level: opts.diff, ally: i }));
@@ -183,7 +183,6 @@ function quit() {
   const c = ($('overlay') as HTMLCanvasElement); c.getContext('2d')!.clearRect(0, 0, c.width, c.height);
   // fresh GL canvas for the next battle
   const old = $('gl'), nw = document.createElement('canvas'); nw.id = 'gl'; old.replaceWith(nw);
-  seedEl.value = '' + Math.floor(Math.random() * 99999);
 }
 
 $('btnStart').onclick = start;
