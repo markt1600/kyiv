@@ -331,7 +331,47 @@ export class Renderer {
     this.sky = mkSky();
     const sm = this.sky.material as THREE.ShaderMaterial;
     sm.uniforms.uK = this.skyK; sm.uniforms.uNightCol = this.skyNight;
-    sm.fragmentShader = 'uniform float uK; uniform vec3 uNightCol;\n' + sm.fragmentShader.replace('gl_FragColor = vec4( retColor, 1.0 );', 'gl_FragColor = vec4( retColor * uK + uNightCol, 1.0 );');
+    // the weather is painted into the dome itself, so it has depth from the ground: cumulus on a curved layer that recedes and
+    // thins into haze at the horizon, lit from the sun's side with grey bases and bright rims, cirrus far above, and at night
+    // stars and a moon that the cloud passes in front of
+    Object.assign(sm.uniforms, { uCl: this.cloudU.uTex, uT: this.cloudU.uT, uCover: this.cloudU.uCover, uCloudCol: this.cloudU.uCol, uNight: this.cloudU.uNight, uMoon: this.cloudU.uMoon, uHaze: this.cloudU.uHaze });
+    sm.fragmentShader = `uniform float uK, uT, uCover, uNight; uniform vec3 uNightCol, uCloudCol, uMoon, uHaze; uniform sampler2D uCl;
+      float cHash(vec3 p){ p = fract(p*0.3183099 + 0.1); p *= 17.0; return fract(p.x*p.y*p.z*(p.x + p.y + p.z)); }
+      float cDen(vec2 p){
+        vec2 w = p + uT*vec2(0.0042, 0.0026);
+        w += (texture2D(uCl, w*0.13 + 0.3).rg - 0.5)*0.3;
+        float b = texture2D(uCl, w*0.17).r, m = texture2D(uCl, w*0.41 + 0.17).r, f = texture2D(uCl, w*0.97 + uT*0.0015).r, e = texture2D(uCl, w*0.6).g;
+        float n = b*0.6 + m*0.27 + f*0.13;
+        float dd = (n - (1.0 - uCover)*0.74 - 0.13)*2.6;
+        return clamp(dd - (e - 0.4)*0.3*(1.0 - smoothstep(0.0, 0.8, dd)), 0.0, 1.0);                // billowed edges, solid cores
+      }
+      vec3 skyExtras(vec3 col, vec3 d, vec3 sun){
+        float up = max(d.y, 0.0), hz = smoothstep(0.0, 0.2, d.y);
+        // night: stars (thinning into the haze near the horizon) and the moon
+        vec3 q = d*190.0, c = floor(q); float h = cHash(c), st = step(0.9965, h)*smoothstep(0.42, 0.05, length(fract(q) - 0.5));
+        col += vec3(0.85, 0.9, 1.0)*st*(0.5 + 0.5*sin(uT*3.0 + h*900.0))*(0.4 + 1.6*fract(h*77.0))*uNight*smoothstep(0.02, 0.3, d.y)*0.75;
+        float md = dot(d, uMoon); col += (vec3(0.95, 0.96, 0.9)*smoothstep(0.99955, 0.9997, md)*0.9 + vec3(0.35, 0.42, 0.55)*pow(max(md, 0.0), 220.0)*0.35)*uNight;
+        // high cirrus: thin streaks, far above the cumulus
+        vec2 pc = d.xz/(up + 0.3);
+        float ci = texture2D(uCl, pc*vec2(0.035, 0.1) + uT*0.0011).r*texture2D(uCl, pc*0.06 + 0.5).r;
+        col = mix(col, uCloudCol*0.92 + col*0.25, smoothstep(0.2, 0.75, ci)*0.3*hz);
+        // cumulus on a curved layer: the divisor bends the layer down toward the horizon so distant cloud stacks up in rows
+        // two samples a little apart in height give each cloud a visible underside and a body rising behind it
+        vec2 p = d.xz/(up + 0.11)*0.62; float lo = cDen(p), hi2 = cDen(p*0.93 + 0.011), dn = max(lo, hi2*0.9);
+        if (dn > 0.003) {
+          vec2 sx = sun.xz/max(length(sun.xz), 0.2);
+          float sh = cDen(p + sx*0.07)*0.6 + cDen(p + sx*0.2)*0.4;               // how much cloud lies between this point and the sun
+          float lit = exp(-sh*2.1), mu = max(dot(d, sun), 0.0);
+          vec3 shade = uCloudCol*vec3(0.36, 0.4, 0.47) + col*0.2;
+          vec3 cc = mix(shade, uCloudCol*1.05, lit*(1.0 - 0.3*dn)*(1.0 - 0.5*smoothstep(0.1, 0.7, lo)));   // flat grey bases, sunlit tops and flanks
+          cc += uCloudCol*pow(mu, 9.0)*(1.0 - dn)*1.1*(1.0 - uNight);              // silver lining toward the sun
+          cc = mix(uHaze, cc, exp(-0.5/(up + 0.11)*0.2));                           // aerial perspective
+          col = mix(col, cc, smoothstep(0.0, 0.3, dn)*0.97*smoothstep(0.0, 0.07, d.y));
+        }
+        // a band of haze sitting on the horizon ties the dome to the fogged ground
+        return mix(col, uHaze, (1.0 - smoothstep(-0.02, 0.13, d.y))*0.85);
+      }
+      ` + sm.fragmentShader.replace('gl_FragColor = vec4( retColor, 1.0 );', 'gl_FragColor = vec4( skyExtras(retColor * uK + uNightCol, direction, normalize(vSunDirection)), 1.0 );');
     this.scene.add(this.sky);
     const sk2 = new THREE.Mesh(this.sky.geometry, sm); sk2.scale.setScalar(3400); this.skyEnv.add(sk2);
     this.hemi = new THREE.HemisphereLight(bio.sky, 0x30281e, 0.95); this.scene.add(this.hemi);
@@ -554,7 +594,7 @@ export class Renderer {
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }` }));
-    this.clouds.renderOrder = -9; this.clouds.frustumCulled = false; this.scene.add(this.clouds); this.noReflect.push(this.clouds);
+    this.clouds.renderOrder = -9; this.clouds.frustumCulled = false; this.clouds.visible = false;
     this.world = new World(this.scene, map, quality);
     this.world.setFallen([fallenSoldier(DEFS.rifle, 0), fallenSoldier(DEFS.rifle, 1)], this.unitMat);
     this.skyDay.set(bio.sky);
@@ -686,6 +726,7 @@ export class Renderer {
     }
     sky.multiplyScalar(lerp(0.62, 0.5, overcast)).lerp(_c2.setHex(0x101826), night);
     (this.scene.background as THREE.Color).copy(sky); (this.scene.fog as THREE.Fog).color.copy(sky);
+    this.cloudU.uNight.value = night; this.cloudU.uHaze.value.copy(sky);
     this.scene.environmentIntensity = lerp(1.35, 0.8, night);
     (this.skirt.material as THREE.MeshBasicMaterial).color.copy(this.skirtCol).multiplyScalar(lerp(1, 0.06, night) * (0.35 + 0.65 * dayK + 0.65 * night));
     if (this.bloomPass) this.bloomPass.strength = lerp(0.18, 0.28, night);
@@ -707,7 +748,7 @@ export class Renderer {
   dispose() { this.renderer.dispose(); }
 
   // ───────────── camera / picking ─────────────
-  private fogMat!: THREE.MeshBasicMaterial; private clouds!: THREE.Mesh; private cloudU = { uTex: { value: null as THREE.Texture | null }, uT: { value: 0 }, uCover: { value: 0.4 }, uCol: { value: new THREE.Color(1, 1, 1) } };
+  private fogMat!: THREE.MeshBasicMaterial; private clouds!: THREE.Mesh; private cloudU = { uTex: { value: null as THREE.Texture | null }, uT: { value: 0 }, uCover: { value: 0.4 }, uCol: { value: new THREE.Color(1, 1, 1) }, uNight: { value: 0 }, uMoon: { value: new THREE.Vector3(-0.35, 0.82, 0.3).normalize() }, uHaze: { value: new THREE.Color(0.5, 0.55, 0.6) } };
   /** first-person ride-along: the unit whose eyes we are looking through, and how far the viewer has turned their head */
   fp: Unit | null = null; fpLook = { yaw: 0, pitch: 0, fov: 68 }; private fpSaved = { dist: 260, x: 0, z: 0 }; private alpha = 1;
   /** enter (or with null, leave) the first-person view. The unit keeps doing whatever it was ordered to do. */
