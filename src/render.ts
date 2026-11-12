@@ -662,7 +662,49 @@ export class Renderer {
   dispose() { this.renderer.dispose(); }
 
   // ───────────── camera / picking ─────────────
+  /** first-person ride-along: the unit whose eyes we are looking through, and how far the viewer has turned their head */
+  fp: Unit | null = null; fpLook = { yaw: 0, pitch: 0, fov: 68 }; private fpSaved = { dist: 260, x: 0, z: 0 }; private alpha = 1;
+  /** enter (or with null, leave) the first-person view. The unit keeps doing whatever it was ordered to do. */
+  setFP(u: Unit | null) {
+    if (u === this.fp) return;
+    if (u && !this.fp) this.fpSaved = { dist: this.cam.dist, x: this.cam.x, z: this.cam.z };
+    if (!u && this.fp) { this.cam.dist = this.fpSaved.dist; this.cam.x = this.fp.x; this.cam.z = this.fp.z; }
+    this.fp = u; this.fpLook.yaw = 0; this.fpLook.pitch = 0; this.fpLook.fov = 68;
+    this.camera.fov = u ? 68 : 42; this.camera.near = u ? 0.25 : 2; this.resize();
+  }
+  private updateFP(u: Unit) {
+    const d = u.def, a = this.alpha, map = this.map, L = this.fpLook, T = this.time;
+    const x = lerp(u.px, u.x, a), z = lerp(u.pz, u.z, a), y = lerp(u.py, u.y, a);
+    const hd = u.ph + angDiff(u.ph, u.heading) * a, tu = u.pturret + angDiff(u.pturret, u.turret) * a;
+    let ex = x, ey = y, ez = z, yaw = tu, pitch = 0;
+    if (d.inf) { // through his eyes: the rifle and his hands are in the bottom of the frame
+      const kn = this.pose.get(u) || 0, mv = Math.min(1, u.speed / d.speed);
+      ey = y + 4.12 - 0.93 * kn + Math.abs(Math.sin(T * 11 + u.id * 1.7)) * 0.1 * mv; ex += Math.sin(tu) * 0.42; ez += Math.cos(tu) * 0.42; pitch = -0.04;
+    } else if (d.cls === 'air') { // from the nose (or the drone's camera), looking down at the ground ahead
+      yaw = hd; ex += Math.sin(hd) * d.r * 1.15; ez += Math.cos(hd) * d.r * 1.15; ey = y + (d.hover ? -0.4 : 0.2); pitch = d.kami ? -0.3 : d.hover ? -0.38 : -0.3;
+    } else if (d.cls === 'building') { ey = y + d.h + 2.5; ex -= Math.sin(tu) * d.r * 0.5; ez -= Math.cos(tu) * d.r * 0.5; pitch = -0.1; }
+    else { // from the commander's hatch, looking along the gun
+      const k = Math.min(1, u.speed / (d.speed || 1));
+      ey = y + d.h * 1.02 + 1.1 + Math.abs(Math.sin(T * 29 + u.id)) * 0.07 * k; ex -= Math.sin(tu) * d.r * 0.32; ez -= Math.cos(tu) * d.r * 0.32; pitch = -0.07;
+    }
+    L.pitch = clamp(L.pitch, -1.2, 0.9); L.fov = clamp(L.fov, 22, 90);
+    yaw += L.yaw; pitch += L.pitch;
+    ey = Math.max(ey, map.groundY(ex, ez) + 0.6);
+    const cam = this.camera, cp = Math.cos(pitch);
+    if (cam.fov !== L.fov) { cam.fov = L.fov; this.resize(); }
+    cam.position.set(ex, ey, ez); cam.up.set(0, 1, 0);
+    cam.lookAt(ex + Math.sin(yaw) * cp, ey + Math.sin(pitch), ez + Math.cos(yaw) * cp);
+    if (d.cls === 'air' && !d.hover) cam.rotateZ(u.bank * 0.7);
+    if (this.shake > 0.01) { const k = this.shake * 0.25; cam.position.x += (Math.random() - 0.5) * k; cam.position.y += (Math.random() - 0.5) * k; cam.position.z += (Math.random() - 0.5) * k; }
+    cam.updateMatrixWorld();
+    const c = this.cam; c.x = x; c.z = z; c.dist = 90; // sound, weather and effects stay centred on the unit
+    this.sun.target.position.set(x, y, z);
+    this.sun.position.set(x + this.sunDir.x * 700, y + this.sunDir.y * 700, z + this.sunDir.z * 700);
+    const sc = this.sun.shadow.camera; sc.left = -200; sc.right = 200; sc.top = 200; sc.bottom = -200; sc.near = 50; sc.far = 1400; sc.updateProjectionMatrix();
+    this.sun.castShadow = this.quality >= 1;
+  }
   private updateCamera() {
+    if (this.fp) { if (this.fp.dead || !this.shown(this.fp)) this.setFP(null); else { this.updateFP(this.fp); return; } }
     const c = this.cam, S = this.map.size;
     c.x = clamp(c.x, 0, S); c.z = clamp(c.z, 0, S); c.dist = clamp(c.dist, 20, 1500); c.pitch = clamp(c.pitch, 0.45, 1.5);
     const ty = this.map.groundY(c.x, c.z);
@@ -961,6 +1003,7 @@ export class Renderer {
     const g = this.game, map = this.map, me = this.me;
     this.time += dt;
     this.updateEnv(dt, paused);
+    this.alpha = alpha;
     this.updateCamera();
     this.consumeEvents();
     for (const im of this.ims.values()) (im as any)._n = 0;
@@ -1026,7 +1069,7 @@ export class Renderer {
             _q2.setFromAxisAngle(_yAxis, th - h); _e.set(lean, 0, sway + cold); _q3.setFromEuler(_e); _q2.multiply(_q3);
             _p.y += Math.sin(T * 1.6 + ph) * 0.02;
             _m2.compose(_p, _q2, _s); _m2.premultiply(_m);
-            if (geo.h) { // the head leads the eyes
+            if (geo.h && u !== this.fp) { // the head leads the eyes (and is not drawn when we are looking out of it)
               const look = idle ? scan * 0.9 + (Math.sin(T * 0.21 + ph * 3) > 0.86 ? Math.sin(T * 2.2 + ph) * 0.7 : 0) : 0;
               _p.set(0, d.model.neck! - tp[1], 0); _q3.setFromAxisAngle(_yAxis, look); _e.set(idle ? Math.sin(T * 0.4 + ph * 5) * 0.08 : -lean * 0.6, 0, 0); _q4.setFromEuler(_e); _q3.multiply(_q4);
               _m3.compose(_p, _q3, _s); _m3.premultiply(_m2);

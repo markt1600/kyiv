@@ -94,6 +94,7 @@ enemy structure; a guidance satellite cuts artillery dispersion by 60%.
 - **Shift** queue orders or place many buildings (drag for a row)
 - **A** attack-move · **P** patrol · **G** guard · **R** repair · **E** salvage · **S** stop · **Del** scuttle
 - **V** supply ranges · **T** thermal drone view · **H** find command post · **Tab** idle builder
+- **F** first-person view of the selected unit (drag to look, wheel to zoom, **Tab** next unit, **F** / **Esc** to return)
 - Arrows / screen edge / middle-drag pan · wheel zoom · **Z / X** rotate · **Space** pause · **+ / −** speed
 
 ### Touch (phones and tablets)

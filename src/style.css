@@ -181,3 +181,7 @@ body.phone #orders { flex-wrap: nowrap; overflow-x: auto; margin-bottom: 4px; -w
 body.phone #buildgrid { display: flex; overflow-x: auto; gap: 4px; -webkit-overflow-scrolling: touch; scrollbar-width: none; } body.phone #buildgrid::-webkit-scrollbar, body.phone #orders::-webkit-scrollbar { display: none; }
 body.phone .bbtn { flex: none; width: 54px; height: 54px; min-height: 0; aspect-ratio: auto; } body.phone .bbtn.tech { width: 112px; }
 body.phone #mtools { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; } body.phone #mtools button { min-width: 50px; min-height: 28px; padding: 2px 4px; }
+
+/* first-person ride-along: clear the screen of command panels */
+body.fp #bottom, body.fp #modeHint { display: none; }
+body.fp canvas#gl { cursor: grab !important; }

@@ -35,7 +35,7 @@ export class UI {
   mobile = document.body.classList.contains('mobile');
   private tch: { x: number; y: number; lx: number; ly: number; t: number; moved: boolean; box: boolean } | null = null;
   private pinch: { d: number; a: number; cx: number; cy: number } | null = null; private lpTimer = 0; private boxMode = false; private suppress = 0;
-  private tipT = 0;
+  private tipT = 0; private fpWas = false;
   private lastTap = { t: 0, x: 0, y: 0, u: null as Unit | null };
   private idleIdx = 0; private heat = 0; private lastCiv = -999; private showSupply = false;
 
@@ -153,7 +153,8 @@ export class UI {
     this.on($('minimap'), 'contextmenu', e => e.preventDefault());
     this.on(window, 'mousemove', (e: MouseEvent) => {
       this.mx = e.clientX; this.my = e.clientY; this.inside = true;
-      if (this.pan) {
+      if (this.pan && this.r.fp) { const L = this.r.fpLook, k = L.fov / 68 * 0.004; L.yaw -= (e.clientX - this.pan.x) * k; L.pitch -= (e.clientY - this.pan.y) * k; this.pan.x = e.clientX; this.pan.y = e.clientY; }
+      else if (this.pan) {
         const c = this.r.cam, dx = e.clientX - this.pan.x, dy = e.clientY - this.pan.y;
         if (this.pan.rot) { c.yaw -= dx * 0.006; c.pitch += dy * 0.004; }
         else {
@@ -167,6 +168,7 @@ export class UI {
     this.on(document, 'mouseleave', () => { this.inside = false; });
     this.on(cv, 'mousedown', (e: MouseEvent) => {
       this.audio.init();
+      if (this.r.fp) { this.pan = { x: e.clientX, y: e.clientY, rot: false }; e.preventDefault(); return; } // first person: any drag looks around
       if (e.button === 1) { this.pan = { x: e.clientX, y: e.clientY, rot: e.altKey || e.ctrlKey }; e.preventDefault(); return; }
       if (e.button === 0) {
         if (this.placing) { const c = this.placeCell(e.clientX, e.clientY); if (c) this.placeStart = c; return; }
@@ -178,7 +180,7 @@ export class UI {
       }
     });
     this.on(window, 'mouseup', (e: MouseEvent) => {
-      if (e.button === 1) { this.pan = null; return; }
+      if (e.button === 1 || this.r.fp) { this.pan = null; this.drag = null; return; }
       if (e.button !== 0) return;
       if (this.placing && this.placeStart) { this.commitPlace(e); this.placeStart = null; return; }
       const d = this.drag; this.drag = null; if (!d) return;
@@ -198,6 +200,7 @@ export class UI {
     });
     this.on(cv, 'wheel', (e: WheelEvent) => {
       e.preventDefault();
+      if (this.r.fp) { this.r.fpLook.fov *= Math.exp(e.deltaY * 0.001); return; }
       const c = this.r.cam, before = this.r.pick(e.clientX, e.clientY), k = Math.exp(e.deltaY * 0.0012);
       const nd = clamp(c.dist * k, 20, 1500);
       if (before && e.deltaY < 0) { const f = 1 - nd / c.dist; c.x += (before.x - c.x) * f; c.z += (before.z - c.z) * f; }
@@ -230,15 +233,18 @@ export class UI {
         case 't': this.r.flir = !this.r.flir; this.toast(this.r.flir ? (this.r.composer ? 'Thermal drone feed' : 'Thermal view needs Medium or High graphics') : 'Daylight camera'); break;
         case 'v': this.showSupply = !this.showSupply; this.toast('Supply range overlay ' + (this.showSupply ? 'on' : 'off')); break;
         case 's': for (const u of this.mine()) { this.game.clearOrders(u); if (u.def.factory) u.queue.length = 0; } this.audio.ui('click'); break;
+        case 'f': this.toggleFP(); break;
         case 'h': { const p = this.me.prime; if (p) { this.select([p], false); this.r.cam.x = p.x; this.r.cam.z = p.z; } break; }
         case 'Tab': {
           e.preventDefault();
+          if (this.r.fp) { this.cycleFP(e.shiftKey ? -1 : 1); break; }
           const idle = this.game.units.filter(u => u.team === this.me && u.built && u.def.bp && !u.def.factory && !u.orders.length);
           if (idle.length) { const u = idle[this.idleIdx++ % idle.length]; this.select([u], false); this.r.cam.x = u.x; this.r.cam.z = u.z; } else this.toast('No idle builders');
           break;
         }
         case 'Delete': for (const u of this.mine()) if (!u.def.commander) this.game.kill(u, null); this.selected.clear(); this.panelKey = ''; break;
         case 'Escape':
+          if (this.r.fp) { this.toggleFP(); break; }
           if (this.placing || this.mode) { this.placing = null; this.mode = null; this.panelKey = ''; } else this.cb.pause();
           break;
         case ' ': e.preventDefault(); this.cb.pause(); break;
@@ -273,6 +279,22 @@ export class UI {
     this.on($('spdDown'), 'click', () => this.cb.speed(-1));
   }
 
+  /** drop into (or climb out of) the first-person view of the selected unit; it keeps following its orders */
+  toggleFP() {
+    const r = this.r;
+    if (r.fp) { r.setFP(null); this.panelKey = ''; this.audio.ui('click'); return; }
+    const u = this.mine().find(x => x.built && !x.inFactory && !x.def.neutral);
+    if (!u) { this.toast('Select one of your units first'); return; }
+    this.placing = null; this.mode = null; this.select([u], false); r.setFP(u); this.audio.ui('click');
+    this.toast(this.mobile ? 'First person — drag to look, pinch to zoom, View to return' : 'First person — drag to look, wheel to zoom, Tab next unit, F or Esc to return');
+  }
+  /** hop to the next unit of the same broad kind without leaving first person */
+  private cycleFP(dir: number) {
+    const cur = this.r.fp; if (!cur) return;
+    const us = this.game.units.filter(u => u.team === this.me && !u.dead && u.built && !u.inFactory && u.def.cls === cur.def.cls && u.def.cls !== 'building' || u === cur);
+    const i = us.indexOf(cur), n = us[(i + dir + us.length) % us.length];
+    if (n && n !== cur) { this.select([n], false); this.r.setFP(n); }
+  }
   private setMode(m: Mode) {
     if (!this.mine().length) return;
     this.placing = null; this.mode = this.mode === m ? null : m; this.panelKey = ''; this.audio.ui('click');
@@ -311,13 +333,14 @@ export class UI {
       this.mx = x; this.my = this.placing ? y - PLACE_OFF : y; this.inside = false;
       this.tch = { x, y, lx: x, ly: y, t: performance.now(), moved: false, box: this.boxMode };
       if (this.tch.box) this.drag = { x, y, on: true };
-      else if (!this.placing && !this.mode) this.lpTimer = window.setTimeout(() => {
+      else if (!this.placing && !this.mode && !this.r.fp) this.lpTimer = window.setTimeout(() => {
         const tc = this.tch; if (!tc || tc.moved) return;
         tc.box = true; this.drag = { x: tc.x, y: tc.y, on: true }; if (navigator.vibrate) navigator.vibrate(12);
       }, 380);
     }, { passive: false });
     this.on(cv, 'touchmove', (e: TouchEvent) => {
       e.preventDefault();
+      if (e.touches.length >= 2 && this.r.fp) { const n = two(e), p = this.pinch || n; this.r.fpLook.fov *= p.d / n.d; this.pinch = n; return; }
       if (e.touches.length >= 2) {
         const n = two(e), p = this.pinch || n, c = this.r.cam;
         c.dist = clamp(c.dist * p.d / n.d, 20, 1500);
@@ -327,7 +350,8 @@ export class UI {
       const tc = this.tch, t = e.touches[0]; if (!tc || !t) return;
       const x = t.clientX, y = t.clientY;
       if (!tc.moved && Math.hypot(x - tc.x, y - tc.y) > 12) { tc.moved = true; if (!tc.box) clearTimeout(this.lpTimer); }
-      if (this.placing) { this.mx = x; this.my = y - PLACE_OFF; }
+      if (this.r.fp) { if (tc.moved) { const L = this.r.fpLook, k = L.fov / 68 * 0.005; L.yaw -= (x - tc.lx) * k; L.pitch -= (y - tc.ly) * k; } }
+      else if (this.placing) { this.mx = x; this.my = y - PLACE_OFF; }
       else if (tc.box) { this.mx = x; this.my = y; }
       else if (tc.moved) panBy(x - tc.lx, y - tc.ly);
       tc.lx = x; tc.ly = y;
@@ -337,6 +361,7 @@ export class UI {
       if (e.touches.length) { this.pinch = e.touches.length >= 2 ? two(e) : null; this.tch = null; this.drag = null; return; }
       this.pinch = null;
       const tc = this.tch; this.tch = null; if (!tc) return;
+      if (this.r.fp) { this.drag = null; return; }
       if (this.placing) {
         if (tc.moved || performance.now() - tc.t > 120) { const c = this.placeCell(this.mx, this.my); if (c) { this.placeStart = c; this.commitPlace({ clientX: this.mx, clientY: this.my, shiftKey: false }); this.placeStart = null; } }
         else { const c = this.placeCell(tc.x, tc.y - 0); if (c) { this.mx = tc.x; this.my = tc.y; this.placeStart = c; this.commitPlace({ clientX: tc.x, clientY: tc.y, shiftKey: false }); this.placeStart = null; } }
@@ -493,15 +518,18 @@ export class UI {
     // camera keys + edge scroll
     let dx = 0, dz = 0;
     if (k.has('ArrowLeft')) dx -= 1; if (k.has('ArrowRight')) dx += 1; if (k.has('ArrowUp')) dz -= 1; if (k.has('ArrowDown')) dz += 1;
-    if (this.inside && !this.pan && !this.mobile && document.hasFocus()) {
+    if (this.inside && !this.pan && !this.mobile && !this.r.fp && document.hasFocus()) {
       if (this.mx <= 2) dx -= 1; else if (this.mx >= innerWidth - 3) dx += 1;
       if (this.my <= 2) dz -= 1; else if (this.my >= innerHeight - 3) dz += 1;
     }
-    if (dx || dz) {
+    if ((dx || dz) && this.r.fp) { this.r.fpLook.yaw -= dx * dt * 1.4; this.r.fpLook.pitch -= dz * dt * 0.9; }
+    else if (dx || dz) {
       const sp = c.dist * 1.25 * dt, cs = Math.cos(c.yaw), sn = Math.sin(c.yaw);
       c.x += (dx * cs + dz * sn) * sp; c.z += (-dx * sn + dz * cs) * sp;
     }
-    if (k.has('z')) c.yaw += dt * 1.4; if (k.has('x')) c.yaw -= dt * 1.4;
+    if (!this.r.fp) { if (k.has('z')) c.yaw += dt * 1.4; if (k.has('x')) c.yaw -= dt * 1.4; }
+    if (this.fpWas && !this.r.fp) { this.toast('Back to the map'); this.panelKey = ''; }
+    this.fpWas = !!this.r.fp; document.body.classList.toggle('fp', this.fpWas);
     this.heat *= Math.exp(-dt / 6);
     if (this.audio.music) this.audio.music.intensity = paused ? 0 : 1 - Math.exp(-this.heat / 9);
     // prune selection
@@ -527,7 +555,21 @@ export class UI {
   private drawOverlay(dt: number) {
     const ctx = this.ctx, g = this.game, me = this.me, r = this.r, p = this.tmp, map = g.map;
     ctx.clearRect(0, 0, this.ov.width, this.ov.height);
-    const far = r.cam.dist > 520, W = innerWidth, Hh = innerHeight;
+    const far = r.cam.dist > 520 && !r.fp, W = innerWidth, Hh = innerHeight;
+    if (r.fp) { // sight reticle and a status line for whoever we are riding with
+      const u = r.fp, d = u.def, cx = W / 2, cy = Hh / 2, t = u.wt[0] || u.forced;
+      ctx.strokeStyle = t ? 'rgba(255,120,90,0.9)' : 'rgba(235,240,230,0.75)'; ctx.lineWidth = 1.5; ctx.beginPath();
+      for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.moveTo(cx + ax * 7, cy + ay * 7); ctx.lineTo(cx + ax * 18, cy + ay * 18); }
+      ctx.stroke(); ctx.fillStyle = ctx.strokeStyle; ctx.fillRect(cx - 1, cy - 1, 2, 2);
+      const o = u.orders[0], f = clamp(u.hp / d.hp, 0, 1), bw = 220, bx = cx - bw / 2, by = Hh - (this.mobile ? 56 : 74);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(bx - 10, by - 26, bw + 20, 50);
+      ctx.fillStyle = '#f0f0ea'; ctx.font = '600 13px system-ui, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(nm(d, u.team.fac), cx, by - 9);
+      ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(bx, by, bw, 5); ctx.fillStyle = f > 0.6 ? '#4fd66a' : f > 0.3 ? '#f0c030' : '#f04a30'; ctx.fillRect(bx, by, bw * f, 5);
+      ctx.fillStyle = '#b9c0b4'; ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText((t ? 'Engaging ' + nm(t.def, t.team.fac) : o ? o.type.charAt(0).toUpperCase() + o.type.slice(1) + (o.def ? ' ' + nm(o.def, u.team.fac) : '') : 'Holding') + (this.game.freezing(u) ? ' · freezing' : ''), cx, by + 19);
+      ctx.textAlign = 'left';
+    }
     const shift = this.keys.has('Shift');
     for (const u of g.units) {
       if (u.dead) continue;
@@ -672,6 +714,7 @@ export class UI {
           ob('Patrol', 'P', this.mode === 'patrol', () => this.setMode('patrol')); ob('Guard', 'G', this.mode === 'guard', () => this.setMode('guard'));
           if (hasBp) { ob('Repair', 'R', this.mode === 'repair', () => this.setMode('repair')); ob('SalvagE', 'E', this.mode === 'reclaim', () => this.setMode('reclaim')); }
         }
+        if (mine.length === 1 && mine[0].built && !mine[0].inFactory) ob('First person', 'F', !!this.r.fp, () => this.toggleFP());
         ob('Stop', 'S', false, () => { for (const u of this.mine()) { this.game.clearOrders(u); if (u.def.factory) u.queue.length = 0; } });
         if (builder && builder.def.factory) ob('Repeat: ' + (builder.repeat ? 'ON' : 'off'), 'R', builder.repeat, () => { const v = !builder.repeat; for (const u of this.mine()) if (u.def.factory) u.repeat = v; this.panelKey = ''; });
         if (builder) for (const id of builder.def.builds) {
