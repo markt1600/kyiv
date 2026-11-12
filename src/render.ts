@@ -330,8 +330,8 @@ export class Renderer {
       sh.fragmentShader = 'varying vec3 vOp; uniform sampler2D uGrime;\n' + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
         float cm = texture2D(uGrime, vOp.xz*0.11 + vOp.y*0.07).r*0.5 + texture2D(uGrime, vOp.zy*0.13 + 0.37).r*0.5;
         float gr = texture2D(uGrime, vOp.xy*0.9 + vOp.z*0.61).g;
-        float px = texture2D(uGrime, floor(vOp.xy*5.0)/41.0 + floor(vOp.z*5.0)/29.0).r;
-        diffuseColor.rgb *= mix(0.72, 1.12, smoothstep(0.44, 0.56, cm)) * (0.82 + 0.36*gr) * mix(0.86, 1.1, step(0.5, px));
+        float px = smoothstep(0.42, 0.58, texture2D(uGrime, vOp.xy*0.43 + vOp.z*0.37).r*0.6 + texture2D(uGrime, vOp.zy*1.1 + vOp.x*0.7).g*0.4);
+        diffuseColor.rgb *= mix(0.72, 1.12, smoothstep(0.44, 0.56, cm)) * (0.82 + 0.36*gr) * mix(0.84, 1.1, px);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.26, 0.20), (1.0 - smoothstep(0.0, 2.2, vOp.y)) * 0.45 * gr);`);
     };
     this.plate = plate;
@@ -340,7 +340,7 @@ export class Renderer {
     const hn = map.hn, H = map.heights;
     const pos = new Float32Array(hn * hn * 3), col = new Float32Array(hn * hn * 3), uv = new Float32Array(hn * hn * 2);
     const cl = new THREE.Color(bio.low), cm = new THREE.Color(bio.mid), ch = new THREE.Color(bio.high), cr = new THREE.Color(bio.rock), cs = new THREE.Color(bio.shore), tmp = new THREE.Color();
-    const pad = new THREE.Color(0x8a867c), asphalt = new THREE.Color(0x6a6c6e), gravel = new THREE.Color(0x7a7468), paving = new THREE.Color(0x6a675f), woods = new THREE.Color(0x2c4426), hedge = new THREE.Color(0x33502a);
+    const pad = new THREE.Color(0x8a867c), asphalt = new THREE.Color(0x6a6c6e), gravel = new THREE.Color(0x7a7468), paving = new THREE.Color(0x6a675f), woods = new THREE.Color(0x3d5632), hedge = new THREE.Color(0x33502a);
     const FIELDS = [0xa3975a, 0x5e7c3a, 0x55452f, 0x8c8840, 0x6a7f42, 0x7a6a44].map(h => new THREE.Color(h));
     // distance from every vertex to the nearest road
     const rd = new Float32Array(hn * hn).fill(99), aMat = new Float32Array(hn * hn);
@@ -371,7 +371,7 @@ export class Renderer {
         tmp.lerp(fc, fm * 0.85 * (0.9 + 0.1 * Math.sin(fv * 72 * 1.6)));
         if (Math.min(e, e2) < 3) tmp.lerp(hedge, fm * 0.7);
       }
-      tmp.lerp(woods, clamp(forest * 1.1, 0, 0.6));
+      tmp.lerp(woods, clamp(forest * 0.9, 0, 0.45));
       tmp.lerp(paving, urb * 0.8 * (0.55 + 0.45 * vnoise(x * 0.13, z * 0.13, 23)));
       { const sh = clamp(1 - (h - map.waterY) / 4, 0, 1); tmp.lerp(cs, sh); }
       tmp.lerp(cr, clamp((slope - 0.42) * 3, 0, 1));
@@ -425,7 +425,7 @@ export class Renderer {
     const oc = document.createElement('canvas'); oc.width = oc.height = 512; const ox2 = oc.getContext('2d')!;
     { let sd = 9; const rn = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
       const im = ox2.createImageData(512, 512);
-      for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) { const sp = hash2(x, y, 77), v = 150 + 70 * (tile(x, y, 512, 12, 3) - 0.5) + 60 * (tile(x, y, 512, 48, 5) - 0.5) + 40 * (tile(x, y, 512, 160, 6) - 0.5) + (sp - 0.5) * 36, i = (y * 512 + x) * 4; im.data[i] = im.data[i + 1] = v; im.data[i + 2] = v * 0.96; im.data[i + 3] = 255; }
+      for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) { const sp = hash2(x, y, 77), v = 186 + 70 * (tile(x, y, 512, 12, 3) - 0.5) + 60 * (tile(x, y, 512, 48, 5) - 0.5) + 40 * (tile(x, y, 512, 160, 6) - 0.5) + (sp - 0.5) * 36, i = (y * 512 + x) * 4; im.data[i] = im.data[i + 1] = v; im.data[i + 2] = v * 0.96; im.data[i + 3] = 255; }
       ox2.putImageData(im, 0, 0);
       for (let k = 0; k < 16000; k++) { const x = rn() * 512, y = rn() * 512, a = -1.57 + (rn() - 0.5) * 1.6, l = 3 + rn() * 9, v = rn() < 0.55 ? 205 + rn() * 50 : 60 + rn() * 70; ox2.strokeStyle = `rgba(${v * 0.96},${v},${v * 0.88},${0.25 + rn() * 0.45})`; ox2.lineWidth = 0.7 + rn() * 0.8; ox2.beginPath(); ox2.moveTo(x, y); ox2.quadraticCurveTo(x + Math.cos(a) * l * 0.5 + (rn() - 0.5) * 3, y + Math.sin(a) * l * 0.5, x + Math.cos(a) * l, y + Math.sin(a) * l); ox2.stroke(); }
       for (let k = 0; k < 500; k++) { const v = 90 + rn() * 130; ox2.fillStyle = `rgba(${v},${v * 0.97},${v * 0.92},0.8)`; ox2.beginPath(); ox2.ellipse(rn() * 512, rn() * 512, 0.8 + rn() * 2.4, 0.6 + rn() * 1.6, rn() * 3, 0, 6.3); ox2.fill(); }
@@ -451,7 +451,7 @@ export class Renderer {
         float cl = smoothstep(0.42, 0.68, texture2D(uCloud, vWxz/1100.0 + uTime*vec2(0.0035, 0.002)).r);
         diffuseColor.rgb *= mix(1.0, 0.6, cl);`).replace('#include <color_fragment>', `#include <color_fragment>
         float n1 = texture2D(uCloud, vWxz/41.0).g, n2 = texture2D(uCloud, vWxz/260.0).r, n3 = texture2D(uCloud, vWxz/6.3).g;
-        diffuseColor.rgb *= (0.74 + 0.5*n1) * (0.86 + 0.28*n3);
+        diffuseColor.rgb *= (0.84 + 0.32*n1) * (0.86 + 0.28*n3);
         // paved ground: cracked, patched concrete in the districts; asphalt roads with worn edge lines and centre dashes
         float rdist = texture2D(uRoad, vWxz/uSize).r * 31.875;
         float roadK = 1.0 - smoothstep(3.1, 3.6, rdist), hk = max(vMat, roadK);
@@ -459,7 +459,7 @@ export class Renderer {
         float nearK = 1.0 - smoothstep(18.0, 120.0, length(vViewPosition));
         if (nearK > 0.01) {
           vec3 fo = texture2D(map, vWxz/3.3).rgb * texture2D(map, vWxz/0.9 + 0.37).rgb, fh = texture2D(uHard, vWxz/4.1).rgb * texture2D(uHard, vWxz/1.3 + 0.21).rgb;
-          diffuseColor.rgb *= mix(vec3(1.0), mix(0.4 + 2.3*fo, 0.35 + 2.6*fh, hk), nearK*0.85);
+          diffuseColor.rgb *= mix(vec3(1.0), mix(0.55 + 1.5*fo, 0.5 + 1.9*fh, hk), nearK*0.8);
         }
         vec3 hard = texture2D(uHard, vWxz/17.0).rgb;
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*(0.5 + 1.0*hard), vMat*0.75);
@@ -1172,7 +1172,7 @@ export class Renderer {
           if (d.cls === 'air' && !d.hover && d.speed >= 55 && Math.random() < 0.6) fireP.spawn(x - Math.sin(h) * d.r, y, z - Math.cos(h) * d.r, 0, 0, 0, 0.25, 1.6, 2.4, 1.4, 0.5, 0.7);
         }
       }
-      if (selected.has(u) && nSel < 600) {
+      if (selected.has(u) && nSel < 600 && u !== this.fp) {
         _q.identity(); _p.set(x, (d.cls === 'air' ? map.groundY(x, z) : y) + 0.6, z); const r = d.r * 1.3; _v.set(r, 1, r);
         _m.compose(_p, _q, _v); this.selIM.setMatrixAt(nSel, _m);
         this.selIM.setColorAt(nSel, _c.setHex(u.team === me ? 0x60ff90 : u.team.ally === me.ally ? 0xffe060 : 0xff5040)); nSel++;

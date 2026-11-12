@@ -378,7 +378,7 @@ export class Scenery {
       sh.fragmentShader = 'uniform vec3 uGrass; varying float vGy;\n' + sh.fragmentShader.replace('#include <map_fragment>', '#include <map_fragment>\n diffuseColor.rgb *= uGrass * (0.55 + 0.6*vGy);');
     };
     this.grassIM = new THREE.InstancedMesh(mergeGeometries(gparts), gmat, quality >= 1 ? 6500 : 3000);
-    this.grassIM.count = 0; this.grassIM.frustumCulled = false; this.grassIM.receiveShadow = true; this.grassIM.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.grassIM.setColorAt(0, _c.set(0xffffff)); this.grassIM.count = 0; this.grassIM.frustumCulled = false; this.grassIM.receiveShadow = true; this.grassIM.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(this.grassIM); this.foliage.push(this.grassIM);
     const N = this.count = items.length;
     this.kind = new Uint8Array(N); this.idx = new Int32Array(N); this.cell = new Int32Array(N); this.state = new Uint8Array(N); this.tint = new Float32Array(N);
@@ -439,8 +439,9 @@ export class Scenery {
    */
   grass(cx: number, cz: number, on: boolean, snow: number, dry: number, mud: number) {
     const im = this.grassIM, map = this.map;
+    this.kinds[3].im.visible = !on; // the stylised tufts that read well from the air give way to real blades up close
     if (!on) { if (im.count) { im.count = 0; this.gcx = 1e9; } return; }
-    this.uGrass.value.setRGB(0.36, 0.5, 0.2).lerp(_c.setRGB(0.62, 0.56, 0.28), Math.max(dry * 0.75, mud * 0.4)).lerp(_c.setRGB(0.3, 0.24, 0.15), mud * 0.5).lerp(_c.setRGB(0.72, 0.7, 0.6), snow * 0.8);
+    this.uGrass.value.setRGB(0.26, 0.38, 0.15).lerp(_c.setRGB(0.46, 0.43, 0.2), Math.max(dry * 0.6, mud * 0.4)).lerp(_c.setRGB(0.3, 0.24, 0.15), mud * 0.5).lerp(_c.setRGB(0.72, 0.7, 0.6), snow * 0.8);
     if (Math.hypot(cx - this.gcx, cz - this.gcz) < 14 && Math.abs(snow - this.gSnow) < 0.1) return;
     this.gcx = cx; this.gcz = cz; this.gSnow = snow;
     const STEP = 1.7, RAD = 64, n = map.n, g0x = Math.floor((cx - RAD) / STEP), g0z = Math.floor((cz - RAD) / STEP), cnt = Math.ceil(RAD * 2 / STEP);
@@ -451,13 +452,15 @@ export class Scenery {
       const x = (gx + hash2(gx, gz, 213)) * STEP, z = (gz + hash2(gx, gz, 215)) * STEP, d = Math.hypot(x - cx, z - cz);
       if (d > RAD || x < 2 || z < 2 || x > map.size - 2 || z > map.size - 2) continue;
       const c = Math.floor(z / CELL) * n + Math.floor(x / CELL);
-      if (map.road[c] || map.block[c] || map.fuel[c] < 0.02 || map.urban[c] > 0.75 && h > 0.2) continue;
+      if (map.road[c] || map.block[c] || map.fuel[c] < 0.02 || map.urban[c] > 0.75 && h > 0.55) continue;
       const y = map.heightAt(x, z); if (y < map.waterY + 0.5) continue;
-      const sc = (0.6 + h * 1.4) * (1 - 0.5 * map.urban[c]) * (d > RAD - 14 ? (RAD - d) / 14 : 1); // thin out at the rim so the patch has no edge
+      const lush = 0.55 + 0.75 * vnoise(x / 23, z / 23, 219); // meadow here, cropped turf there
+      const sc = (0.5 + h * 0.9) * lush * (1 - 0.5 * map.urban[c]) * (d > RAD - 14 ? (RAD - d) / 14 : 1); // thin out at the rim so the patch has no edge
       _q.setFromAxisAngle(_y, h * 40); _p.set(x, y - 0.05, z); _s.set(sc, sc * short * (0.7 + hash2(gx, gz, 217) * 0.7), sc);
-      _m.compose(_p, _q, _s); im.setMatrixAt(k++, _m);
+      _m.compose(_p, _q, _s); im.setMatrixAt(k, _m);
+      const tone = 0.7 + hash2(gx, gz, 221) * 0.55; im.setColorAt(k++, _c.setRGB(tone * (0.9 + hash2(gx, gz, 223) * 0.3), tone, tone * 0.85));
     }
-    im.count = k; im.instanceMatrix.needsUpdate = true;
+    im.count = k; im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true;
   }
   /** how brightly unexplored / unseen vegetation is drawn (raised in first person so the distance is not black) */
   reveal = 0;

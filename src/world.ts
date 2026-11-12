@@ -111,6 +111,28 @@ function scars(c: Civ, parts: THREE.BufferGeometry[], W: number, L: number, h: n
   }
 }
 
+/**
+ * Depth for a block's long faces, so it holds up from the pavement: a balcony under some windows (a few glazed in, a few
+ * hung with washing), air-conditioning boxes, satellite dishes, a downpipe at each end. `a` runs along the face, `d` is the depth.
+ */
+function facadeKit(parts: THREE.BufferGeometry[], r: () => number, a: number, d: number, h: number, alongX: boolean, tint: number) {
+  const put = (w: number, hh: number, dp: number, along: number, y: number, side: number, hex: number, k = 1) => parts.push(alongX ? bx(w, hh, dp, along, y, side * (d / 2 + dp / 2), hex, false, k) : bx(dp, hh, w, side * (d / 2 + dp / 2), y, along, hex, false, k));
+  const floors = Math.floor(h / FLOOR), k0 = Math.ceil((-a / 2 + 1.7) / BAY - 0.5), k1 = Math.floor((a / 2 - 1.7) / BAY - 0.5);
+  for (const side of [-1, 1]) {
+    for (let f = 1; f < floors; f++) for (let k = k0; k <= k1; k++) {
+      const x = (k + 0.5) * BAY, q = r();
+      if (q < 0.34) { // balcony slab and parapet, sometimes glazed in, sometimes with washing on the line
+        put(2.7, 0.16, 1.0, x, f * FLOOR + 0.32, side, 0x8a867e); put(2.7, 0.9, 0.12, x, f * FLOOR + 0.48, side * (1 + 1.76 / d), [tint, 0x7f8a92, 0x8c7a66, 0x9aa39a][Math.floor(r() * 4)], 0.8);
+        if (q < 0.1) put(2.6, 1.3, 0.1, x, f * FLOOR + 1.4, side * (1 + 1.76 / d), 0x2c3a44);
+        else if (q < 0.16) put(1.6, 0.7, 0.06, x + 0.3, f * FLOOR + 1.3, side * (1 + 1.5 / d), [0xd8d4c8, 0x8a3028, 0x3a5a8a][Math.floor(r() * 3)]);
+      } else if (q < 0.42) put(0.9, 0.6, 0.5, x + 0.9, f * FLOOR + 0.5, side, 0xc8c8c2); // air conditioner
+      else if (q < 0.45) put(0.7, 0.7, 0.3, x - 1, f * FLOOR + 2.3, side, 0xd8d8d2);       // satellite dish
+    }
+    put(0.22, h - 0.5, 0.22, -a / 2 + 0.5, 0.2, side, 0x4a4c4e); put(0.22, h - 0.5, 0.22, a / 2 - 0.5, 0.2, side, 0x4a4c4e); // downpipes
+    put(a, 0.7, 0.12, 0, 0, side, 0x55524c); // plinth
+  }
+}
+
 function buildCiv(c: Civ): THREE.BufferGeometry {
   const r = mulberry32(Math.floor(c.seed * 1e6) + 1), W = c.fw * CELL - 2, L = c.fh * CELL - 2;
   const lvl = c.dmg, char = lvl === 2 ? 0.55 : lvl === 1 ? 0.86 : 1;
@@ -140,13 +162,17 @@ function buildCiv(c: Civ): THREE.BufferGeometry {
     case 1: { // five-to-nine storey slab block
       const tint = [0xcfcac0, 0xbfb7a6, 0xc4c9c9, 0xd0c2a8, 0xb9b3aa][Math.floor(r() * 5)];
       parts.push(bx(W, h, L, 0, 0, 0, tint, true), bx(W + 0.5, 0.5, L + 0.5, 0, h, 0, 0x3a3a38), bx(W * 0.2, 1.6, L * 0.2, W * 0.2, h + 0.5, L * 0.1, 0x55554f));
-      const long = W > L; for (let i = -1; i <= 1; i++) parts.push(bx(long ? 2.4 : 1.4, 2.6, long ? 1.4 : 2.4, long ? i * W * 0.3 : W / 2 + 0.6, 0, long ? L / 2 + 0.6 : i * L * 0.3, 0x6a665e));
+      const long = W > L; for (let i = -1; i <= 1; i++) parts.push(bx(long ? 2.4 : 1.4, 2.6, long ? 1.4 : 2.4, long ? i * W * 0.3 : W / 2 + 0.6, 0, long ? L / 2 + 0.6 : i * L * 0.3, 0x6a665e),
+        bx(long ? 1.3 : 0.2, 2.2, long ? 0.2 : 1.3, long ? i * W * 0.3 : W / 2 + 1.32, 0, long ? L / 2 + 1.32 : i * L * 0.3, 0x2a221c));
+      facadeKit(parts, r, long ? W : L, long ? L : W, h, long, tint);
       break;
     }
     case 2: { // tower block
       const tint = [0xc9c9c4, 0xd2cab8, 0xb8c0c4, 0xc7b9a2][Math.floor(r() * 4)], w = Math.min(W, L) - 1;
       parts.push(bx(w, h, w, 0, 0, 0, tint, true), bx(w + 0.6, 0.6, w + 0.6, 0, h, 0, 0x3a3a38), bx(w * 0.35, 2.6, w * 0.35, w * 0.15, h + 0.6, -w * 0.15, 0x5a5a55), cyl(0.08, 0.1, 5, -w * 0.3, h + 0.6, w * 0.3, 0x222222, 4),
-        bx(w + 1.2, 3.2, w + 1.2, 0, 0, 0, 0x74706a), bx(1, h * 0.92, 0.5, w / 2 - 2.2, 2, w / 2 + 0.25, tint, false, 0.8), bx(1, h * 0.92, 0.5, -w / 2 + 2.2, 2, w / 2 + 0.25, tint, false, 0.8));
+        bx(w + 1.2, 3.2, w + 1.2, 0, 0, 0, 0x74706a), bx(1, h * 0.92, 0.5, w / 2 - 2.2, 2, w / 2 + 0.25, tint, false, 0.8), bx(1, h * 0.92, 0.5, -w / 2 + 2.2, 2, w / 2 + 0.25, tint, false, 0.8),
+        bx(2.2, 2.6, 0.3, 0, 0, w / 2 + 0.76, 0x2a2622), bx(4, 0.3, 2, 0, 2.9, w / 2 + 1.4, 0x55524c));
+      facadeKit(parts, r, w, w, h, true, tint); facadeKit(parts, r, w, w, h, false, tint);
       break;
     }
     case 3: { // warehouse / workshop
@@ -256,22 +282,23 @@ function bridgeGeo(b: Bridge): THREE.BufferGeometry {
   const g = mergeGeometries(P); g.deleteAttribute('uv'); return g;
 }
 
+/** a civilian (or, lying, anyone who has fallen): rounded limbs, shoulders, a head with hair — a person, not a stack of boxes */
 function figure(lying: boolean): THREE.BufferGeometry {
-  const P: THREE.BufferGeometry[] = [];
-  const b = (w: number, h: number, l: number, x: number, y: number, z: number, hex: number, ry = 0) => { const g = new THREE.BoxGeometry(w, h, l); if (ry) g.rotateY(ry); g.translate(x, y, z); P.push(paint(g, hex, 1, false, 0.04)); };
-  const SKIN = 0xc8a084;
-  if (lying) {
-    b(1.3, 0.55, 1.7, 0, 0.3, 0, 0xffffff); b(0.5, 0.42, 1.9, -0.42, 0.24, -1.7, 0xd8d8d8, 0.14); b(0.5, 0.42, 1.9, 0.5, 0.24, -1.65, 0xd8d8d8, -0.3);
-    b(0.4, 0.36, 1.4, -1.05, 0.2, 0.5, 0xffffff, 0.9); b(0.4, 0.36, 1.4, 0.95, 0.2, -0.1, 0xffffff, -0.3);
-    const hd = new THREE.SphereGeometry(0.4, 8, 6); hd.translate(0.1, 0.36, 1.25); P.push(paint(hd, SKIN, 1, false, 0));
-    b(0.5, 0.36, 0.9, -0.42, 0.2, -2.7, 0x333333, 0.14); b(0.5, 0.36, 0.9, 0.8, 0.2, -2.6, 0x333333, -0.3);
-  } else {
-    b(0.46, 1.9, 0.5, -0.3, 0.95, 0, 0x55555e); b(0.46, 1.9, 0.5, 0.3, 0.95, 0, 0x55555e); b(1.2, 1.7, 0.7, 0, 2.75, 0, 0xffffff);
-    b(0.34, 1.5, 0.4, -0.78, 2.7, 0, 0xffffff); b(0.34, 1.5, 0.4, 0.78, 2.7, 0, 0xffffff);
-    const hd = new THREE.SphereGeometry(0.38, 8, 6); hd.translate(0, 3.95, 0); P.push(paint(hd, SKIN, 1, false, 0));
-    b(0.8, 0.26, 0.8, 0, 4.2, 0, 0x403a34);
-  }
-  const g = mergeGeometries(P); g.deleteAttribute('uv'); return g;
+  const P: THREE.BufferGeometry[] = [], SKIN = 0xc8a084, TROUSERS = 0x5a5e6e, SHOE = 0x24201c, HAIR = 0x2c221a;
+  const cap = (r: number, len: number, x: number, y: number, z: number, hex: number, rx = 0, rz = 0) => { const g = new THREE.CapsuleGeometry(r, len, 3, 8); if (rx) g.rotateX(rx); if (rz) g.rotateZ(rz); g.translate(x, y, z); P.push(paint(g, hex, 1, false, 0.03)); };
+  const sph = (r: number, x: number, y: number, z: number, hex: number, sy = 1, sz = 1) => { const g = new THREE.SphereGeometry(r, 10, 8); g.scale(1, sy, sz); g.translate(x, y, z); P.push(paint(g, hex, 1, false, 0.02)); };
+  // legs, shoes
+  cap(0.22, 1.5, -0.27, 1.15, 0, TROUSERS, lying ? 0.1 : 0); cap(0.22, 1.5, 0.27, 1.15, 0, TROUSERS, lying ? -0.2 : 0, lying ? 0.12 : 0);
+  sph(0.26, -0.27, 0.16, 0.12, SHOE, 0.6, 1.5); sph(0.26, 0.27, 0.16, 0.12, SHOE, 0.6, 1.5);
+  // coat: hips, chest, shoulders; arms hang (or lie thrown out)
+  cap(0.47, 0.7, 0, 2.55, 0, 0xffffff); sph(0.5, 0, 3.2, 0, 0xffffff, 0.8, 0.8); cap(0.5, 0.25, 0, 2.05, 0, 0xe8e8e8);
+  cap(0.17, 1.1, -0.68, 2.75, 0, 0xffffff, 0, lying ? 0.9 : 0.1); cap(0.17, 1.1, 0.68, 2.75, lying ? 0.3 : 0, 0xffffff, lying ? -0.5 : 0, lying ? -0.4 : -0.1);
+  sph(0.16, lying ? -1.25 : -0.76, lying ? 2.4 : 2.0, 0, SKIN); sph(0.16, lying ? 1.0 : 0.76, lying ? 2.25 : 2.0, lying ? 0.4 : 0, SKIN);
+  // neck, head, hair
+  cap(0.14, 0.2, 0, 3.72, 0, SKIN); sph(0.33, 0, 4.08, 0.03, SKIN, 1.12, 1); sph(0.34, 0, 4.24, -0.1, HAIR, 0.7, 0.95); sph(0.05, -0.12, 4.12, 0.33, 0x1a1410); sph(0.05, 0.12, 4.12, 0.33, 0x1a1410); sph(0.07, 0, 4.03, 0.35, SKIN, 1.2, 1);
+  const g = mergeGeometries(P); g.deleteAttribute('uv');
+  if (lying) { g.rotateX(-Math.PI / 2); g.translate(0, 0.3, 1.8); }
+  return g;
 }
 
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color();
@@ -292,8 +319,10 @@ export class World {
         sh.uniforms.uSnow = this.uSnow;
         sh.vertexShader = 'varying float vNy; varying vec3 vWp;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vNy = normal.y; vWp = (modelMatrix * vec4(position, 1.0)).xyz;');
         sh.fragmentShader = 'varying float vNy; varying vec3 vWp; uniform float uSnow;\n' + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
-          float gr = fract(sin(dot(floor(vWp.xz * 1.7) + floor(vWp.y * 2.3), vec2(12.9898, 78.233))) * 43758.5453);
-          diffuseColor.rgb *= 0.86 + 0.2 * gr;
+          // plaster and concrete grain: fine speckle plus broad weather staining, never visible squares
+          float gr = fract(sin(dot(floor(vWp.xz * 9.0) + floor(vWp.y * 9.0) * 1.7, vec2(12.9898, 78.233))) * 43758.5453);
+          float st = sin(vWp.x * 0.37 + sin(vWp.y * 0.9) * 1.3) * sin(vWp.z * 0.41 + vWp.y * 0.23) * 0.5 + 0.5;
+          diffuseColor.rgb *= (0.93 + 0.1 * gr) * (0.86 + 0.18 * st);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.88, 0.92), uSnow * smoothstep(0.45, 0.9, vNy) * 0.9);`);
       };
       return m;
@@ -316,6 +345,16 @@ export class World {
     this.buildProps(scene, map, quality);
     const im = (g: THREE.BufferGeometry, cap: number, mat: THREE.Material) => { const m = new THREE.InstancedMesh(g, mat, cap); m.count = 0; m.frustumCulled = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.setColorAt(0, _c.set(0xffffff)); scene.add(m); return m; };
     const cloth = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+    // the per-person colour dyes only the coat (the parts modelled in white); skin, hair, trousers and shoes keep their own colour
+    // and merely darken with it, so a body still decays as a whole
+    cloth.onBeforeCompile = sh => {
+      sh.vertexShader = sh.vertexShader.replace('#include <color_vertex>', `vColor = color;
+        #ifdef USE_INSTANCING_COLOR
+        float dye = step(0.88, min(color.r, min(color.g, color.b)));
+        float lum = clamp(max(instanceColor.r, max(instanceColor.g, instanceColor.b)) * 1.7, 0.2, 1.0);
+        vColor *= mix(vec3(lum), instanceColor.rgb, dye);
+        #endif`);
+    };
     this.bodyIM = im(figure(true), 3000, cloth); this.bodyIM.receiveShadow = true;
     this.civIM = im(figure(false), 400, cloth); this.civIM.castShadow = quality >= 2;
     const cv = document.createElement('canvas'); cv.width = cv.height = 64; const cx = cv.getContext('2d')!;
@@ -365,7 +404,7 @@ export class World {
     // lamp posts
     mk([cyl(0.16, 0.24, 11, 0, 0, 0, 0x6c7074, 6), bx(3.2, 0.2, 0.24, 1.5, 10.8, 0, 0x6c7074), bx(1.2, 0.26, 0.5, 2.8, 10.6, 0, 0xcfd2d0), cyl(0.4, 0.5, 0.5, 0, 0, 0, 0x5a5d60, 6)], lamps, [0xffffff, 0xd8d8d8], false);
     // hedgehogs: three steel beams welded crosswise, laid in rows across the roads into the city
-    const beam = (rx: number, rz: number) => { const g = new THREE.BoxGeometry(0.4, 4.6, 0.4); g.rotateX(rx); g.rotateZ(rz); g.translate(0, 1.5, 0); return paint(g, 0x5a4034, 1, false, 0.12); };
+    const beam = (rx: number, rz: number) => { const g = new THREE.BoxGeometry(0.3, 3.6, 0.3); g.rotateX(rx); g.rotateZ(rz); g.translate(0, 1.15, 0); return paint(g, 0x5a4034, 1, false, 0.12); };
     for (const b of map.bridges) for (const sd of [-1, 1]) { const nx = -b.t[1], nz = b.t[0], cx = b.x + nx * sd * (b.len / 2 + 22), cz = b.z + nz * sd * (b.len / 2 + 22); for (let k = -3; k <= 3; k++) if (k !== 0 && r() < 0.85) { const x = cx + b.t[0] * k * 6.5 + (r() - 0.5) * 3, z = cz + b.t[1] * k * 6.5 + (r() - 0.5) * 3; if (map.passAt(x, z)) hogs.push([x, z, r() * 6.283, 0.9 + r() * 0.3]); } }
     const s0 = map.starts[0];
     for (let k = 0; k < 40; k++) { const a = k / 40 * 6.283, x = s0.x + Math.cos(a) * 132 + (r() - 0.5) * 8, z = s0.z + Math.sin(a) * 132 + (r() - 0.5) * 8; if (r() < 0.6 && free(x, z)) hogs.push([x, z, r() * 6.283, 0.9 + r() * 0.3]); }
