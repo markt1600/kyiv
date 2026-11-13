@@ -8,18 +8,28 @@ export class Audio {
     try {
       const C = window.AudioContext || (window as any).webkitAudioContext;
       this.ctx = new C();
-      const comp = this.ctx.createDynamicsCompressor(); comp.connect(this.ctx.destination);
-      this.master = this.ctx.createGain(); this.master.gain.value = this.volume; this.master.connect(comp);
+      // effects and score each get their own gentle limiter: on a shared, hard compressor every shell burst ducked the
+      // whole mix, which is heard as the sound cutting out and coming back
+      const lim = (thr: number, ratio: number, rel: number) => { const k = this.ctx!.createDynamicsCompressor(); k.threshold.value = thr; k.knee.value = 12; k.ratio.value = ratio; k.attack.value = 0.004; k.release.value = rel; k.connect(this.ctx!.destination); return k; };
+      const comp = lim(-10, 3, 0.4), fx = lim(-13, 5, 0.1);
+      this.master = this.ctx.createGain(); this.master.gain.value = this.volume * 0.8; this.master.connect(fx);
+      // a suspended context (tab switched away, phone call, screen lock) is woken by the next touch or key
+      const wake = () => { if (this.ctx && this.ctx.state !== 'running') this.ctx.resume().catch(() => { }); };
+      for (const e of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(e, wake, { passive: true });
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
       const n = this.ctx.sampleRate; this.noise = this.ctx.createBuffer(1, n, n);
       const d = this.noise.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
       this.music = new Music(this.ctx, comp, this.noise);
       this.master.connect(this.music.reverbIn(0.22));
     } catch { this.ctx = null; }
   }
-  setVolume(v: number) { this.volume = v; if (this.ctx) this.master.gain.value = v; }
-  private ok(key: string, gap: number) {
-    if (!this.ctx || this.ctx.state !== 'running' || this.voices > 14) return false;
-    const t = this.ctx.currentTime; if (t - (this.last[key] || -9) < gap) return false;
+  setVolume(v: number) { this.volume = v; if (this.ctx) this.master.gain.value = v * 0.8; }
+  /** may this sound play? Each kind is rate-limited on its own, and as the mix fills up the quietest (most distant) sounds are
+   *  shed first, so a big fight thins out gradually instead of every effect dropping at once while long explosions ring. */
+  private ok(key: string, gap: number, v = 1) {
+    if (!this.ctx || this.ctx.state !== 'running') return false;
+    const load = this.voices / 44; if (load >= 1 || v < load * load * 0.7) return false;
+    const t = this.ctx.currentTime; if (t - (this.last[key] || -9) < gap * (1 + load * 2)) return false;
     this.last[key] = t; return true;
   }
   private tone(type: OscillatorType, f0: number, f1: number, dur: number, vol: number) {
@@ -40,21 +50,21 @@ export class Audio {
   /** v: 0..1 loudness from distance */
   /** small-arms / autocannon fire: a dry crack with a little body behind it */
   gun(v: number, heavy = false) {
-    if (v < 0.03 || !this.ok(heavy ? 'gn2' : 'gn', heavy ? 0.07 : 0.045)) return;
+    if (v < 0.03 || !this.ok(heavy ? 'gn2' : 'gn', heavy ? 0.07 : 0.045, v)) return;
     this.burst(heavy ? 0.13 : 0.07, (heavy ? 0.26 : 0.16) * v, heavy ? 3200 : 5200 + Math.random() * 1800, heavy ? 300 : 900, 0.9);
     this.tone('square', heavy ? 150 : 230 + Math.random() * 60, 60, heavy ? 0.09 : 0.045, (heavy ? 0.16 : 0.07) * v);
   }
   /** mortar tube / grenade launcher */
-  thump(v: number) { if (v < 0.03 || !this.ok('th', 0.08)) return; this.tone('sine', 170, 55, 0.16, 0.3 * v); this.burst(0.1, 0.1 * v, 900, 200); }
+  thump(v: number) { if (v < 0.03 || !this.ok('th', 0.08, v)) return; this.tone('sine', 170, 55, 0.16, 0.3 * v); this.burst(0.1, 0.1 * v, 900, 200); }
   cannon(v: number, big: boolean) {
-    if (v < 0.03 || !this.ok('cn', 0.06)) return;
+    if (v < 0.03 || !this.ok('cn', 0.06, v)) return;
     this.burst(big ? 0.5 : 0.22, (big ? 0.5 : 0.28) * v, big ? 900 : 1600, 90); this.tone('sine', big ? 90 : 140, 40, big ? 0.4 : 0.18, 0.4 * v);
   }
-  missile(v: number) { if (v < 0.03 || !this.ok('ms', 0.07)) return; this.burst(0.35, 0.14 * v, 600, 3000, 2); }
+  missile(v: number) { if (v < 0.03 || !this.ok('ms', 0.07, v)) return; this.burst(0.35, 0.14 * v, 600, 3000, 2); }
   boom(v: number, size: number) {
-    if (v < 0.03 || !this.ok('bm', 0.05)) return;
+    if (v < 0.03 || !this.ok('bm', 0.05, Math.min(1, v * 1.5))) return;
     const s = Math.min(1, size / 20);
-    this.burst(0.35 + s * 1.2, (0.3 + s * 0.5) * v, 1400 - s * 700, 40); this.tone('sine', 110 - s * 50, 28, 0.3 + s * 0.8, (0.35 + s * 0.4) * v);
+    this.burst(0.35 + s * 0.9, (0.28 + s * 0.4) * v, 1400 - s * 700, 40); this.tone('sine', 110 - s * 50, 28, 0.3 + s * 0.6, (0.3 + s * 0.32) * v);
   }
   ui(kind: 'click' | 'order' | 'error' | 'done' | 'alert' | 'place') {
     if (!this.ok('ui' + kind, kind === 'alert' ? 4 : 0.04)) return;
@@ -144,7 +154,7 @@ export class Music {
     f.type = 'lowpass'; f.frequency.value = Math.min(9000, hz(m) * (stacc ? 5 : 3.2) + 500 + vel * 1600); f.Q.value = 0.5;
     if (stacc) this.env(g, t, 0.012, vel * 0.11, 0.05, Math.min(0.2, dur)); else this.env(g, t, Math.min(0.35, dur * 0.3), vel * 0.085, dur, 0.5);
     f.connect(g); this.bus(g, 0.9);
-    this.voice('sawtooth', m, stacc ? [-6, 7] : [-9, 0, 8], t, t + dur + 0.8, f, stacc ? 0 : 5);
+    this.voice('sawtooth', m, stacc ? [-6, 7] : [-9, 0, 8], t, t + (stacc ? Math.min(0.2, dur) + 0.1 : dur + 0.6), f, stacc ? 0 : 5);
   }
   private brass(m: number, t: number, dur: number, vel: number) {
     const c = this.ctx, f = c.createBiquadFilter(), g = c.createGain();
@@ -170,7 +180,7 @@ export class Music {
     const c = this.ctx, g = c.createGain(); this.env(g, t, 0.5, vel * 0.1, dur, 0.9); this.bus(g, 1.3);
     for (const [fq, q, a] of [[650, 5, 1], [1080, 6, 0.6], [2600, 8, 0.25]] as number[][]) {
       const f = c.createBiquadFilter(), fg = c.createGain(); f.type = 'bandpass'; f.frequency.value = fq; f.Q.value = q; fg.gain.value = a; f.connect(fg); fg.connect(g);
-      this.voice('sawtooth', m, [-11, 0, 10], t, t + dur + 1, f, 6);
+      this.voice('sawtooth', m, [-9, 8], t, t + dur + 1, f, 6);
     }
   }
   private nz(t: number, dur: number, vel: number, type: BiquadFilterType, freq: number, q = 0.7, wet = 0.6, attack = 0.002) {
@@ -197,8 +207,8 @@ export class Music {
   }
   private pump() {
     const c = this.ctx; if (c.state !== 'running') return;
-    if (this.next < c.currentTime) this.next = c.currentTime + 0.05;
-    while (this.next < c.currentTime + 0.28) {
+    if (this.next < c.currentTime) { this.next = c.currentTime + 0.05; this.step = 0; }   // fell behind: restart the bar cleanly rather than racing to catch up
+    while (this.next < c.currentTime + 0.7) {   // far enough ahead to ride out a stalled frame in a heavy fight
       this.smoothI += (this.intensity - this.smoothI) * 0.06;
       const I = this.smoothI, bpm = 64 + 78 * Math.pow(I, 0.8), sd = 60 / bpm / 4;
       if (this.step === 0) this.newBar(I);
