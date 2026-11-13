@@ -103,6 +103,25 @@ On Easy and Medium there is an **Auto-build** option (menu, and a toggle button 
 it is on, an assistant runs your construction, engineer production and research in this order; you still raise and command
 the army. Anything you order a builder to do yourself takes priority.
 
+## First-person control
+
+Select one of your units and press **F** to see through its eyes; it keeps following its orders. Press **C** (or the
+*Take control* button) to take it over yourself:
+
+- **Infantry**: WASD to move, Shift to run, mouse to aim, left button fires the rifle or launcher, right button the
+  second weapon (the rifleman's grenade launcher).
+- **Vehicles**: W/S throttle, A/D steer, the turret slews to where you look (a ring shows where the gun is actually
+  pointing), left button fires the main gun, right button the second weapon.
+- **Gun emplacements**: aim and fire only.
+- Bullets go where the sight is and stop at the first thing in the way: an enemy, the ground or a standing building.
+  Shells land where the sight rests; with nothing under the sight, raising the barrel lengthens the shot. Missiles lock
+  on to an enemy near the sight.
+- **Touch**: a movement stick on the left, drag to aim, FIRE and ALT buttons on the right.
+- **C** or **Esc** hands the unit back to its orders; **Tab** jumps to the next unit and takes it over; **F** returns to
+  the map. The rest of the war carries on around you, and your side's other units keep fighting on their own.
+
+Aircraft, drones and missiles fly themselves: you can ride along but not fly them.
+
 ## Controls
 
 - **Click an enemy** with armed units selected to attack it (it highlights under the pointer; Alt-click inspects instead). When it is destroyed they fight on against nearby enemies

@@ -73,6 +73,9 @@ export class Unit {
   resQ: TechDef[] = []; resP = 0;
   /** within reach of a friendly base; troops out of supply freeze in winter */
   sup = true; diving = false; diveY = 0; civ: Civ | null = null;
+  /** direct first-person control by the player: while set the unit ignores its orders and does exactly this.
+   *  fwd/side are -1..1, yaw/pitch where the player is looking, fire is a bit per weapon (1 primary, 2 secondary) */
+  ctl: { fwd: number; side: number; yaw: number; pitch: number; fire: number; run: boolean } | null = null;
   constructor(def: UnitDef, team: Team) {
     this.def = def; this.team = team;
     const n = def.weapons.length;
@@ -618,10 +621,110 @@ export class Game {
       if (this.freezing(u)) { if (u.hp > d.hp * 0.25) u.hp -= d.hp * 0.03 * this.snow; }
       else if (u.sup && u.hp < d.hp && this.tick - u.lastHit > 8 * TICK) u.hp = Math.min(d.hp, u.hp + d.hp * 0.012);
     }
+    if (u.ctl) { this.manual(u); return; }
     this.updateOrders(u);
     if (d.kami) this.updateKami(u);
     if (d.cls === 'ground') this.moveGround(u); else if (d.cls === 'air') this.moveAir(u);
     if (d.weapons.length) this.updateWeapons(u);
+  }
+
+  /** can the player take this unit over in first person? Anything on the ground, and any armed emplacement. */
+  static canControl(u: Unit) { const d = u.def; return u.built && !u.dead && !u.inFactory && !d.neutral && !d.kami && (d.cls === 'ground' || d.cls === 'building' && d.weapons.length > 0 && !d.factory); }
+  private eyeH(u: Unit) { const d = u.def; return d.inf ? 4.1 : d.cls === 'building' ? d.h + 2.5 : d.h * 1.02 + 1.1; }
+  /** a unit under the player's hands: walk or drive where told, lay the weapon where they look, fire when they pull the trigger */
+  private manual(u: Unit) {
+    const c = u.ctl!, d = u.def, map = this.map;
+    u.orders.length = 0; u.forced = null; u.engageT = null; u.goal = false; u.path = null; u.wt.fill(null);
+    if (d.cls === 'ground') {
+      const nav = d.inf ? 2 : 0, mob = this.mobility(u);
+      let nx = u.x, nz = u.z;
+      if (d.inf) {
+        // a soldier faces where he looks and can step in any direction; backing up and sidestepping are slower than going forward
+        const m = Math.min(1, Math.hypot(c.fwd, c.side));
+        u.heading = turnToward(u.heading, c.yaw, 12 * DT); u.turret = turnToward(u.turret, c.yaw, 16 * DT);
+        const sp = d.speed * mob * m * (c.fwd > 0.3 ? (c.run ? 1.45 : 1) : 0.65), dir = c.yaw - Math.atan2(c.side, c.fwd);
+        u.speed += clamp(sp - u.speed, -d.speed * 6 * DT, d.speed * 5 * DT);
+        if (m > 0.05 || u.speed > 0.1) { nx += Math.sin(dir) * u.speed * DT; nz += Math.cos(dir) * u.speed * DT; }
+      } else {
+        // a vehicle: throttle and steering for the hull, the turret slews round to where the commander is looking
+        const want = c.fwd * d.speed * mob * (c.fwd < 0 ? 0.5 : 1);
+        u.speed += clamp(want - u.speed, -d.speed * 3 * DT, d.speed * 2 * DT);
+        const steer = (Math.abs(u.speed) > 0.5 || d.wheel ? Math.min(1, Math.abs(u.speed) / (d.speed * 0.25)) : 1) * (d.wheel && Math.abs(u.speed) < 0.3 ? 0 : 1);
+        u.heading -= c.side * d.turn * 0.5 * steer * (u.speed < -0.3 ? -1 : 1) * DT;
+        u.turret = turnToward(u.turret, c.yaw, (d.weapons[0]?.turn || 4) * DT);
+        nx += Math.sin(u.heading) * u.speed * DT; nz += Math.cos(u.heading) * u.speed * DT;
+      }
+      const list = this.query(nx, nz, d.r + 16);
+      for (let i = 0; i < list.length; i++) {
+        const o = list[i];
+        if (o === u || o.def.cls !== 'ground' || o.inFactory || o.dead) continue;
+        const dx = nx - o.x, dz = nz - o.z, min = d.r + o.def.r, dist = Math.hypot(dx, dz);
+        if (dist < min && dist > 0.01) { const k = (min - dist) * (!o.built ? 1 : o.def.r / (d.r + o.def.r)) * 0.6 / dist; nx += dx * k; nz += dz * k; }
+      }
+      const ox = u.x, oz = u.z;
+      if (map.passAt(nx, nz, nav)) { u.x = nx; u.z = nz; }
+      else if (map.passAt(nx, u.z, nav)) u.x = nx;
+      else if (map.passAt(u.x, nz, nav)) u.z = nz;
+      if (!d.inf && u.x === ox && u.z === oz) u.speed *= 0.5;            // ran into something solid
+      u.y = nav === 2 ? Math.max(map.heightAt(u.x, u.z), map.waterY - 2.5) : map.heightAt(u.x, u.z);
+    } else u.turret = turnToward(u.turret, c.yaw, (d.weapons[0]?.turn || 4) * DT);
+    const ws = d.weapons;
+    for (let i = 0; i < ws.length; i++) {
+      const w = ws[i];
+      if (u.cd[i] > 0) u.cd[i] -= DT;
+      if (w.k === 'ram' || w.k === 'bomb') continue;
+      if (u.burst[i] > 0) { u.burstT[i] -= DT; if (u.burstT[i] <= 0) { this.fireAimed(u, w); u.burst[i]--; u.burstT[i] = w.gap || 0.1; } }
+      if (!(c.fire >> Math.min(i, 1) & 1) || (i > 1) || u.cd[i] > 0 || u.burst[i] > 0) continue;
+      if (w.eShot) { if (u.team.energy < w.eShot) continue; u.team.energy -= w.eShot; u.team.spentE += w.eShot; }
+      u.cd[i] = w.reload * (d.inf && this.freezing(u) ? 1.6 : 1);
+      this.fireAimed(u, w);
+      if (w.burst && w.burst > 1) { u.burst[i] = w.burst - 1; u.burstT[i] = w.gap || 0.1; }
+    }
+  }
+  private markAt(x: number, y: number, z: number) { const t = new Unit(MARK, this.neutral); t.x = t.px = x; t.z = t.pz = z; t.y = t.py = y; t.hp = 1e12; return t; }
+  /** a shot fired by the player along the line of sight: bullets stop at the first thing in the way (an enemy, the ground, a
+   *  building); shells and missiles go to whatever the sight is on, or out to a range set by how high the barrel is raised */
+  private fireAimed(u: Unit, w: WeaponDef) {
+    const c = u.ctl!, d = u.def, map = this.map, gun = w.k === 'gun';
+    const yaw = u.turret + (gun ? (this.rng() - 0.5) * 0.012 : 0), pitch = clamp(c.pitch, -1.1, 0.9) + (gun ? (this.rng() - 0.5) * 0.012 : 0), cp = Math.cos(pitch);
+    const dx = Math.sin(yaw) * cp, dy = Math.sin(pitch), dz = Math.cos(yaw) * cp, ex = u.x, ey = u.y + this.eyeH(u), ez = u.z;
+    let best: Unit | null = null, bt = w.range, lock: Unit | null = null, lockDot = 0.994;
+    for (const o of this.query(u.x, u.z, w.range + 24)) {
+      if (o === u || o.dead || o.inFactory || o.def.neutral || o.team.ally === u.team.ally || !(w.tg & bit(o))) continue;
+      const od = o.def, air = od.cls === 'air', hh = air ? od.r * 0.5 : od.h * 0.5;
+      const cx = o.x - ex, cy = o.y + (air ? 0 : hh) - ey, cz = o.z - ez, tca = cx * dx + cy * dy + cz * dz;
+      if (tca < 0) continue;
+      const len = Math.hypot(cx, cy, cz), rad = Math.max(od.inf ? 2.4 : od.r * 0.85, Math.min(hh, od.r)) + (gun ? 0 : 2);
+      if (tca < bt && len * len - tca * tca < rad * rad) { bt = tca; best = o; }
+      if (len < w.range && tca / len > lockDot) { lockDot = tca / len; lock = o; }
+    }
+    // the ground and standing buildings stop a shot short
+    let end = bt, solid = false;
+    for (let t = 3; t < bt; t += 2.5) {
+      const px = ex + dx * t, py = ey + dy * t, pz = ez + dz * t;
+      if (px < 1 || pz < 1 || px > map.size - 1 || pz > map.size - 1) { end = t; best = null; break; }
+      const gy = map.heightAt(px, pz);
+      if (py < gy) { end = t; best = null; solid = true; break; }
+      const ci = map.civAt[map.cellOf(px, pz)], cv = ci ? map.civ[ci - 1] : null;
+      if (cv && !cv.state && py < gy + cv.h * (cv.dmg >= 2 ? 0.55 : 1)) { end = t; best = null; solid = true; break; }
+    }
+    if (gun) {
+      const mr = d.inf ? d.r * 1.5 : d.r * 0.7, mx = u.x + Math.sin(u.turret) * mr, mz = u.z + Math.cos(u.turret) * mr, my = u.y + d.h * (d.inf ? 0.62 : 0.75);
+      this.events.push({ t: 'beam', x: mx, y: my, z: mz, tx: ex + dx * end, ty: ey + dy * end, tz: ez + dz * end, c: w.color, size: w.dmg });
+      if (best) this.damage(best, w.dmg, u);
+      else if (solid && this.rng() < 0.04) this.igniteArea(ex + dx * end, ez + dz * end, 3, 0.3);
+      return;
+    }
+    let t: Unit | null = w.k === 'missile' ? best || lock : best;
+    if (!t) {
+      let tx = ex + dx * end, tz = ez + dz * end;
+      if (!solid) { const R = clamp(w.range * (0.45 + pitch * 1.6), (w.min || 0) + 4, w.range); tx = u.x + Math.sin(yaw) * R; tz = u.z + Math.cos(yaw) * R; }   // nothing under the sight: elevation sets the range
+      const dd = Math.hypot(tx - u.x, tz - u.z), mn = (w.min || 0) + 2;
+      if (dd < mn) { tx = u.x + Math.sin(yaw) * mn; tz = u.z + Math.cos(yaw) * mn; }
+      tx = clamp(tx, 2, map.size - 2); tz = clamp(tz, 2, map.size - 2);
+      t = this.markAt(tx, map.groundY(tx, tz), tz);
+    }
+    this.fire(u, w, t);
   }
 
   /** one-way attack munitions: home on the target, dive, detonate */

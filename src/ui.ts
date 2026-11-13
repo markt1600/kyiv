@@ -4,7 +4,7 @@ import { CELL } from './map';
 import { Game, SUPPLY_R, Team, Unit, Wreck, TICK } from './sim';
 import { Renderer } from './render';
 import { Audio } from './audio';
-import { clamp, fmtTime } from './util';
+import { angDiff, clamp, fmtTime } from './util';
 
 type Mode = null | 'fight' | 'patrol' | 'guard' | 'repair' | 'reclaim' | 'move' | 'bombard';
 const $ = (id: string) => document.getElementById(id)!;
@@ -36,6 +36,8 @@ export class UI {
   private tch: { x: number; y: number; lx: number; ly: number; t: number; moved: boolean; box: boolean } | null = null;
   private pinch: { d: number; a: number; cx: number; cy: number } | null = null; private lpTimer = 0; private boxMode = false; private suppress = 0;
   private tipT = 0; private fpWas = false;
+  /** the unit the player is driving in first person, the trigger bits and the touch stick */
+  ctlU: Unit | null = null; private fireBits = 0; private stick = { fwd: 0, side: 0 }; private locked = false;
   private lastTap = { t: 0, x: 0, y: 0, u: null as Unit | null };
   panelKey = '';
   private idleIdx = 0; private heat = 0; private lastCiv = -999; private showSupply = false;
@@ -151,10 +153,25 @@ export class UI {
   private bind() {
     const cv = $('gl');
     this.on(cv, 'contextmenu', e => e.preventDefault());
+    // first-person controls on screen: a button to take or hand back the unit, and for touch a movement stick and triggers
+    this.on($('fpCtl'), 'click', () => { this.control(!this.ctlU); ($('fpCtl') as HTMLElement).blur(); });
+    const stickEl = $('fpStick'), knob = stickEl.firstElementChild as HTMLElement;
+    const stickMove = (e: TouchEvent) => {
+      e.preventDefault(); const t = e.targetTouches[0], b = stickEl.getBoundingClientRect(), R0 = b.width / 2;
+      if (!t) { this.stick.fwd = this.stick.side = 0; knob.style.transform = ''; return; }
+      let sx = (t.clientX - b.left - R0) / R0, sy = (t.clientY - b.top - R0) / R0; const m = Math.hypot(sx, sy); if (m > 1) { sx /= m; sy /= m; }
+      this.stick.side = Math.abs(sx) < 0.15 ? 0 : sx; this.stick.fwd = Math.abs(sy) < 0.15 ? 0 : -sy; knob.style.transform = `translate(${sx * R0 * 0.6}px, ${sy * R0 * 0.6}px)`;
+    };
+    for (const ev of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) this.on(stickEl, ev, stickMove, { passive: false });
+    for (const [id, bitv] of [['fpFire', 1], ['fpAlt', 2]] as [string, number][]) {
+      this.on($(id), 'touchstart', (e: TouchEvent) => { e.preventDefault(); this.audio.init(); this.fireBits |= bitv; }, { passive: false });
+      for (const ev of ['touchend', 'touchcancel']) this.on($(id), ev, (e: TouchEvent) => { e.preventDefault(); this.fireBits &= ~bitv; }, { passive: false });
+    }
     this.on($('minimap'), 'contextmenu', e => e.preventDefault());
     this.on(window, 'mousemove', (e: MouseEvent) => {
       this.mx = e.clientX; this.my = e.clientY; this.inside = true;
-      if (this.pan && this.r.fp) { const L = this.r.fpLook, k = L.fov / 68 * 0.004; L.yaw -= (e.clientX - this.pan.x) * k; L.pitch -= (e.clientY - this.pan.y) * k; this.pan.x = e.clientX; this.pan.y = e.clientY; }
+      if (this.r.fp && document.pointerLockElement === cv) { const L = this.r.fpLook, k = L.fov / 68 * 0.0024; L.yaw -= e.movementX * k; L.pitch -= e.movementY * k; }
+      else if (this.pan && this.r.fp) { const L = this.r.fpLook, k = L.fov / 68 * 0.004; L.yaw -= (e.clientX - this.pan.x) * k; L.pitch -= (e.clientY - this.pan.y) * k; this.pan.x = e.clientX; this.pan.y = e.clientY; }
       else if (this.pan) {
         const c = this.r.cam, dx = e.clientX - this.pan.x, dy = e.clientY - this.pan.y;
         if (this.pan.rot) { c.yaw -= dx * 0.006; c.pitch += dy * 0.004; }
@@ -169,7 +186,10 @@ export class UI {
     this.on(document, 'mouseleave', () => { this.inside = false; });
     this.on(cv, 'mousedown', (e: MouseEvent) => {
       this.audio.init();
-      if (this.r.fp) { this.pan = { x: e.clientX, y: e.clientY, rot: false }; e.preventDefault(); return; } // first person: any drag looks around
+      if (this.r.fp) { // first person: any drag looks around; in control the buttons are the triggers
+        if (this.ctlU) { this.fireBits |= e.button === 2 ? 2 : e.button === 0 ? 1 : 0; if (!this.mobile && document.pointerLockElement !== cv) (cv as any).requestPointerLock?.(); }
+        this.pan = { x: e.clientX, y: e.clientY, rot: false }; e.preventDefault(); return;
+      }
       if (e.button === 1) { this.pan = { x: e.clientX, y: e.clientY, rot: e.altKey || e.ctrlKey }; e.preventDefault(); return; }
       if (e.button === 0) {
         if (this.placing) { const c = this.placeCell(e.clientX, e.clientY); if (c) this.placeStart = c; return; }
@@ -181,6 +201,7 @@ export class UI {
       }
     });
     this.on(window, 'mouseup', (e: MouseEvent) => {
+      if (this.r.fp) this.fireBits &= ~(e.button === 2 ? 2 : e.button === 0 ? 1 : 0);
       if (e.button === 1 || this.r.fp) { this.pan = null; this.drag = null; return; }
       if (e.button !== 0) return;
       if (this.placing && this.placeStart) { this.commitPlace(e); this.placeStart = null; return; }
@@ -214,6 +235,15 @@ export class UI {
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       this.keys.add(k);
       if (e.repeat) return;
+      if (this.ctlU) { // driving a unit: the keyboard belongs to it, not to the command menu
+        if (k === 'c' || k === 'Enter' || k === 'Escape') this.control(false);
+        else if (k === 'f') { this.control(false); this.toggleFP(); }
+        else if (k === 'Tab') { e.preventDefault(); this.control(false); this.cycleFP(e.shiftKey ? -1 : 1); this.control(true, true); }
+        else if (k === 't') { this.r.flir = !this.r.flir; }
+        else if (k === ' ') { e.preventDefault(); this.cb.pause(); }
+        return;
+      }
+      if (this.r.fp && (k === 'c' || k === 'Enter')) { this.control(true); return; }
       if (k >= '0' && k <= '9') {
         const n = +k;
         if (e.ctrlKey || e.metaKey) { this.groups[n] = this.mine(); e.preventDefault(); this.toast('Group ' + n + ' set'); }
@@ -287,11 +317,30 @@ export class UI {
   /** drop into (or climb out of) the first-person view of the selected unit; it keeps following its orders */
   toggleFP() {
     const r = this.r;
-    if (r.fp) { r.setFP(null); this.panelKey = ''; this.audio.ui('click'); return; }
+    if (r.fp) { this.control(false); r.setFP(null); this.panelKey = ''; this.audio.ui('click'); return; }
     const u = this.mine().find(x => x.built && !x.inFactory && !x.def.neutral);
     if (!u) { this.toast('Select one of your units first'); return; }
     this.placing = null; this.mode = null; this.select([u], false); r.setFP(u); this.audio.ui('click');
-    this.toast(this.mobile ? 'First person — drag to look, pinch to zoom, View to return' : 'First person — drag to look, wheel to zoom, Tab next unit, F or Esc to return');
+    this.toast(this.mobile ? 'First person — drag to look, pinch to zoom, View to return' + (Game.canControl(u) ? '. Tap Take control to fight as this unit' : '') : 'First person — drag to look, wheel to zoom, Tab next unit, F or Esc to return' + (Game.canControl(u) ? '. Press C to take control' : ''));
+  }
+  /** take over (or hand back) the unit we are riding with: it stops following orders and does what the player does */
+  control(on: boolean, quiet = false) {
+    const cv = $('gl'), u = this.r.fp;
+    if (!on) {
+      const c = this.ctlU; if (!c) return;
+      c.ctl = null; this.ctlU = null; this.fireBits = 0; this.stick.fwd = this.stick.side = 0; this.r.fpLook.yaw = 0; this.r.fpLook.pitch = 0;
+      if (document.pointerLockElement === cv) document.exitPointerLock();
+      this.locked = false; if (!quiet) this.toast('Control released — the unit is back under orders');
+      return;
+    }
+    if (!u || this.ctlU === u) return;
+    if (!Game.canControl(u)) { if (!quiet) this.toast(u.def.cls === 'air' ? 'Aircraft and drones fly themselves — ride along only' : 'This unit cannot be controlled directly'); return; }
+    this.game.clearOrders(u);
+    u.ctl = { fwd: 0, side: 0, yaw: u.turret, pitch: 0, fire: 0, run: false }; this.ctlU = u; this.fireBits = 0;
+    this.r.fpLook.yaw = u.turret; this.r.fpLook.pitch = 0;
+    if (!this.mobile) try { (cv as any).requestPointerLock?.(); } catch { /* look by dragging instead */ }
+    const w = u.def.weapons, veh = !u.def.inf && u.def.cls === 'ground';
+    if (!quiet) this.toast(this.mobile ? 'You have control — left stick to move, drag to aim, FIRE to shoot' : 'You have control — ' + (u.def.cls === 'building' ? '' : veh ? 'W/S throttle, A/D steer, ' : 'WASD to move, Shift to run, ') + 'mouse to aim, left button fires' + (w.length > 1 ? ', right button ' + (w[1].k === 'gun' ? 'second gun' : w[1].k === 'missile' ? 'missile' : 'grenade') : '') + '. C or Esc hands back');
   }
   /** hop to the next unit of the same broad kind without leaving first person */
   private cycleFP(dir: number) {
@@ -624,6 +673,18 @@ export class UI {
       if (this.mx <= 2) dx -= 1; else if (this.mx >= innerWidth - 3) dx += 1;
       if (this.my <= 2) dz -= 1; else if (this.my >= innerHeight - 3) dz += 1;
     }
+    // direct control: hand the sim what the player is doing this frame
+    const cu = this.ctlU;
+    if (cu && (cu.dead || this.r.fp !== cu || !cu.ctl)) this.control(false, true);
+    else if (cu && cu.ctl) {
+      const L = this.r.fpLook, cc = cu.ctl; L.pitch = clamp(L.pitch, -1.1, 0.9);
+      cc.fwd = clamp((k.has('w') ? 1 : 0) - (k.has('s') ? 1 : 0) + this.stick.fwd, -1, 1); cc.side = clamp((k.has('d') ? 1 : 0) - (k.has('a') ? 1 : 0) + this.stick.side, -1, 1);
+      cc.yaw = L.yaw; cc.pitch = L.pitch; cc.run = k.has('Shift') || this.stick.fwd > 0.92; cc.fire = paused ? 0 : this.fireBits;
+      const lk = document.pointerLockElement === $('gl');
+      if (this.locked && !lk) this.control(false);                 // Esc out of mouse-look hands the unit back
+      this.locked = lk;
+    }
+    document.body.classList.toggle('fpctl', !!this.ctlU);
     if ((dx || dz) && this.r.fp) { this.r.fpLook.yaw -= dx * dt * 1.4; this.r.fpLook.pitch -= dz * dt * 0.9; }
     else if (dx || dz) {
       const sp = c.dist * 1.25 * dt, cs = Math.cos(c.yaw), sn = Math.sin(c.yaw);
@@ -632,6 +693,7 @@ export class UI {
     if (!this.r.fp) { if (k.has('z')) c.yaw += dt * 1.4; if (k.has('x')) c.yaw -= dt * 1.4; }
     if (this.fpWas && !this.r.fp) { this.toast('Back to the map'); this.panelKey = ''; }
     this.fpWas = !!this.r.fp; document.body.classList.toggle('fp', this.fpWas);
+    if (this.r.fp) { const b = $('fpCtl'), can = Game.canControl(this.r.fp), w = this.r.fp.def.weapons; b.classList.toggle('hidden', !can); b.classList.toggle('on', !!this.ctlU); b.textContent = this.ctlU ? 'Hand back' + (this.mobile ? '' : ' (C)') : 'Take control' + (this.mobile ? '' : ' (C)'); $('fpAlt').classList.toggle('hidden', w.length < 2); $('fpFire').classList.toggle('hidden', !w.length); }
     this.heat *= Math.exp(-dt / 6);
     if (this.audio.music) this.audio.music.intensity = paused ? 0 : 1 - Math.exp(-this.heat / 9);
     // prune selection
@@ -669,6 +731,13 @@ export class UI {
       ctx.fillText(nm(d, u.team.fac), cx, by - 9);
       ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(bx, by, bw, 5); ctx.fillStyle = f > 0.6 ? '#4fd66a' : f > 0.3 ? '#f0c030' : '#f04a30'; ctx.fillRect(bx, by, bw * f, 5);
       ctx.fillStyle = '#b9c0b4'; ctx.font = '11px system-ui, sans-serif';
+      if (u.ctl) { // weapon readiness, and for a vehicle where the gun is actually pointing while the turret catches up
+        const ws = d.weapons, off = angDiff(r.fpLook.yaw, u.turret), hf = Math.tan(r.fpLook.fov * Math.PI / 360) * W / Hh;
+        if (!d.inf && Math.abs(off) < 1.2) { const gx = cx - Math.tan(off) / hf * W / 2; ctx.strokeStyle = Math.abs(off) < 0.03 ? 'rgba(120,255,140,0.9)' : 'rgba(255,200,90,0.9)'; ctx.beginPath(); ctx.arc(gx, cy, 11, 0, 6.283); ctx.stroke(); }
+        ws.slice(0, 2).forEach((w, i) => { const rdy = 1 - clamp(u.cd[i] / w.reload, 0, 1), x0 = cx - 60 + i * 64; ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x0, cy + 34, 56, 4); ctx.fillStyle = rdy >= 1 ? '#8ee08a' : '#e0a040'; ctx.fillRect(x0, cy + 34, 56 * rdy, 4); });
+        ctx.fillStyle = '#b9c0b4'; ctx.font = '11px system-ui, sans-serif';
+        ctx.fillText('YOU HAVE CONTROL' + (this.mobile ? '' : ' · C hands back') + (this.game.freezing(u) ? ' · freezing' : ''), cx, by + 19);
+      } else
       ctx.fillText((t ? 'Engaging ' + nm(t.def, t.team.fac) : o ? o.type.charAt(0).toUpperCase() + o.type.slice(1) + (o.def ? ' ' + nm(o.def, u.team.fac) : '') : 'Holding') + (this.game.freezing(u) ? ' · freezing' : ''), cx, by + 19);
       ctx.textAlign = 'left';
     }

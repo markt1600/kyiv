@@ -775,7 +775,8 @@ export class Renderer {
       ey = y + d.h * 1.02 + 1.1 + Math.abs(Math.sin(T * 29 + u.id)) * 0.07 * k; ex -= Math.sin(tu) * d.r * 0.32; ez -= Math.cos(tu) * d.r * 0.32; pitch = -0.07;
     }
     L.pitch = clamp(L.pitch, -1.2, 0.9); L.fov = clamp(L.fov, 22, 90);
-    yaw += L.yaw; pitch += L.pitch;
+    if (u.ctl) { yaw = L.yaw; pitch = L.pitch; }   // under the player's control the view is exactly where they are looking
+    else { yaw += L.yaw; pitch += L.pitch; }
     ey = Math.max(ey, map.groundY(ex, ez) + 0.6);
     const cam = this.camera, cp = Math.cos(pitch);
     if (cam.fov !== L.fov) { cam.fov = L.fov; this.resize(); }
