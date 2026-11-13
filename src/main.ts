@@ -52,7 +52,7 @@ for (const k of ['music', 'sfx'] as const) {
   const el = $('vol' + k) as HTMLInputElement; el.value = '' + Math.round(vol[k] * 100);
   el.oninput = () => { vol[k] = +el.value / 100; applyVol(); try { localStorage.setItem('kyiv-vol', JSON.stringify(vol)); } catch { /* ignore */ } };
 }
-interface Session { game: Game; r: Renderer; ui: UI; ais: AI[]; me: Team; raf: number; paused: boolean; speed: number; ended: boolean; auto: boolean; helper: AI }
+interface Session { game: Game; r: Renderer; ui: UI; ais: AI[]; me: Team; raf: number; paused: boolean; speed: number; ended: boolean; surrendered?: boolean; auto: boolean; helper: AI }
 let S: Session | null = null;
 const SPEEDS = [0.5, 1, 1.5, 2, 3, 4, 5];
 
@@ -207,16 +207,16 @@ $('btnGuide').onclick = () => {
 };
 $('btnShowGuide').onclick = () => { if (S) showGuide(S); };
 
-function showEnd(ses: Session) {
+function showEnd(ses: Session, surrendered = false) {
   if (S !== ses) return;
-  audio.music?.finale(!ses.me.dead);
-  const g = ses.game, won = !ses.me.dead;
-  $('endTitle').textContent = won ? (ses.me.fac ? 'KYIV HAS FALLEN' : 'KYIV STANDS') : (ses.me.fac ? 'THE INVASION HAS FAILED' : 'KYIV HAS FALLEN');
+  audio.music?.finale(!ses.me.dead && !surrendered);
+  const g = ses.game, won = !ses.me.dead && !surrendered;
+  $('endTitle').textContent = surrendered ? 'YOU SURRENDERED' : won ? (ses.me.fac ? 'KYIV HAS FALLEN' : 'KYIV STANDS') : (ses.me.fac ? 'THE INVASION HAS FAILED' : 'KYIV HAS FALLEN');
   ($('endTitle') as HTMLElement).style.color = won ? '#6fe08a' : '#ff6a50';
-  let h = `<p>${g.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })} · ${fmtTime(g.tick / TICK)} played · ${g.bodies.length} dead on the field · ${g.map.civ.filter(c => c.state).length} buildings destroyed</p><table><tr><th>Side</th><th>Built</th><th>Kills</th><th>Lost</th><th>Supplies</th><th>Civilians killed</th></tr>`;
+  let h = (surrendered ? `<p class="surr">${LEADERS[ses.me.fac]} has laid down arms. ${ses.me.fac ? 'The invasion is called off; Kyiv stands.' : 'Kyiv is given up without a final battle.'}</p>` : '') + `<p>${g.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })} · ${fmtTime(g.tick / TICK)} played · ${g.bodies.length} dead on the field · ${g.map.civ.filter(c => c.state).length} buildings destroyed</p><table><tr><th>Side</th><th>Built</th><th>Kills</th><th>Lost</th><th>Supplies</th><th>Civilians killed</th></tr>`;
   for (const t of g.teams) h += `<tr><td style="color:#${TEAM_COLORS[t.id].toString(16).padStart(6, '0')}">${TEAM_NAMES[t.id]}${t.ai ? ' (' + DIFFICULTY_NAMES[t.level] + ')' : ' (you)'}</td><td>${t.stats.built}</td><td>${t.stats.kills}</td><td>${t.stats.lost}</td><td>${Math.round(t.stats.metal)}</td><td>${t.condemn}</td></tr>`;
   $('endStats').innerHTML = h + '</table>';
-  $('btnWatch').classList.toggle('hidden', g.over);
+  $('btnWatch').classList.toggle('hidden', g.over || surrendered);
   $('end').classList.remove('hidden');
 }
 
@@ -235,7 +235,12 @@ $('btnStart').onclick = start;
 // a backgrounded tab should not keep fighting (or draining the battery)
 document.addEventListener('visibilitychange', () => { if (document.hidden && S && !S.paused && !S.ended) { S.paused = true; $('pause').classList.remove('hidden'); } });
 $('btnResume').onclick = () => { if (S) { S.paused = false; $('pause').classList.add('hidden'); } };
-$('btnQuit').onclick = quit;
+// abandoning a battle in progress is a surrender: the war stops where it stands and the final tally is shown
+$('btnQuit').onclick = () => {
+  if (!S || S.ended) { quit(); return; }
+  S.ended = true; S.paused = true; S.surrendered = true; $('pause').classList.add('hidden'); $('guide').classList.add('hidden');
+  showEnd(S, true);
+};
 $('btnAgain').onclick = quit;
 $('btnWatch').onclick = () => $('end').classList.add('hidden');
 window.addEventListener('resize', () => { if (S) { S.r.resize(); S.ui.resize(); } else if (A && A.r) A.r.resize(); });

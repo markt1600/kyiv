@@ -217,3 +217,4 @@ body.phone .guide-card { padding: 12px 16px; } body.phone .guide-card li { margi
 #optAutoRow.off { opacity: 0.4; pointer-events: none; } .optnote { font-size: 11px; color: #8d979c; margin: -3px 0 6px 78px; }
 body.phone .optnote { display: none; } body.mobile #btnAuto { font-size: 10px; padding: 3px 6px; }
 #guideAuto:empty { display: none; } #guideAuto { color: #b4f5c2; }
+#endStats .surr { color: #ffb4a4; font-weight: 600; }
