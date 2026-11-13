@@ -1,7 +1,7 @@
 // Fully synthesized sound effects (WebAudio). No samples.
 export class Audio {
   ctx: AudioContext | null = null; private master!: GainNode; private noise!: AudioBuffer;
-  private last: Record<string, number> = {}; private voices = 0; volume = 0.5; music: Music | null = null;
+  private last: Record<string, number> = {}; private voices = 0; volume = 0.5; music: Music | null = null; musicLim: DynamicsCompressorNode | null = null;
 
   init() {
     if (this.ctx) { this.ctx.resume(); return; }
@@ -11,7 +11,10 @@ export class Audio {
       // effects and score each get their own gentle limiter: on a shared, hard compressor every shell burst ducked the
       // whole mix, which is heard as the sound cutting out and coming back
       const lim = (thr: number, ratio: number, rel: number) => { const k = this.ctx!.createDynamicsCompressor(); k.threshold.value = thr; k.knee.value = 12; k.ratio.value = ratio; k.attack.value = 0.004; k.release.value = rel; k.connect(this.ctx!.destination); return k; };
-      const comp = lim(-10, 3, 0.4), fx = lim(-13, 5, 0.1);
+      const fx = lim(-13, 5, 0.1);
+      // the score is mixed with headroom and only caught by a fast peak limiter: a slow compressor here let every drum
+      // stroke pull the strings and brass down and swell back
+      const comp = this.musicLim = lim(-4, 20, 0.05); comp.knee.value = 0; comp.attack.value = 0.002;
       this.master = this.ctx.createGain(); this.master.gain.value = this.volume * 0.8; this.master.connect(fx);
       // a suspended context (tab switched away, phone call, screen lock) is woken by the next touch or key
       const wake = () => { if (this.ctx && this.ctx.state !== 'running') this.ctx.resume().catch(() => { }); };
@@ -97,12 +100,12 @@ const hz = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 
 export class Music {
   private ctx: AudioContext; private out: GainNode; private dry: GainNode; private rev: ConvolverNode; private wet: GainNode; private noise: AudioBuffer;
-  private timer = 0; private next = 0; private step = 0; private bar = 0; private level = 0; private prog: string[] = PROG[0][0]; private cycle = 0;
-  intensity = 0; private smoothI = 0; volume = 0.42; private on = false;
+  private lastSd = 0.2; private timer = 0; private next = 0; private step = 0; private bar = 0; private level = 0; private prog: string[] = PROG[0][0]; private cycle = 0;
+  intensity = 0; private smoothI = 0; private hold = 0; volume = 0.42; private on = false;
 
   constructor(ctx: AudioContext, dest: AudioNode, noise: AudioBuffer) {
     this.ctx = ctx; this.noise = noise;
-    this.out = ctx.createGain(); this.out.gain.value = this.volume; this.out.connect(dest);
+    this.out = ctx.createGain(); this.out.gain.value = this.volume * 0.85; this.out.connect(dest);
     this.dry = ctx.createGain(); this.dry.gain.value = 0.75; this.dry.connect(this.out);
     // concert-hall impulse response, generated
     const len = Math.floor(ctx.sampleRate * 3.2), ir = ctx.createBuffer(2, len, ctx.sampleRate);
@@ -117,9 +120,9 @@ export class Music {
     this.wet = ctx.createGain(); this.wet.gain.value = 0.55; this.rev.connect(this.wet); this.wet.connect(this.out);
   }
   reverbIn(amount: number): AudioNode { const g = this.ctx.createGain(); g.gain.value = amount; g.connect(this.rev); return g; }
-  setVolume(v: number) { this.volume = v; this.out.gain.setTargetAtTime(v, this.ctx.currentTime, 0.1); }
+  setVolume(v: number) { this.volume = v; this.out.gain.setTargetAtTime(v * 0.85, this.ctx.currentTime, 0.1); }
   start() {
-    if (this.on) return; this.on = true; this.intensity = this.smoothI = 0;
+    if (this.on) return; this.on = true; this.intensity = this.smoothI = this.hold = 0;
     this.next = this.ctx.currentTime + 0.15; this.step = 0; this.bar = 0;
     this.timer = window.setInterval(() => this.pump(), 90);
   }
@@ -194,8 +197,8 @@ export class Music {
     o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.6);
     g.gain.setValueAtTime(vel, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); o.connect(g); this.bus(g, 0.7); o.start(t); o.stop(t + dur + 0.05);
   }
-  private timp(m: number, t: number, vel: number) { this.drum(hz(m) * 1.06, hz(m) * 0.97, t, 1.3, vel * 0.5); this.drum(hz(m) * 2.02, hz(m) * 1.96, t, 0.5, vel * 0.14); this.nz(t, 0.12, vel * 0.2, 'lowpass', 500); }
-  private taiko(t: number, vel: number) { this.drum(92, 44, t, 0.42, vel * 0.7); this.nz(t, 0.09, vel * 0.3, 'lowpass', 700, 1); }
+  private timp(m: number, t: number, vel: number) { this.drum(hz(m) * 1.06, hz(m) * 0.97, t, 1.3, vel * 0.38); this.drum(hz(m) * 2.02, hz(m) * 1.96, t, 0.5, vel * 0.14); this.nz(t, 0.12, vel * 0.2, 'lowpass', 500); }
+  private taiko(t: number, vel: number) { this.drum(92, 44, t, 0.42, vel * 0.5); this.nz(t, 0.09, vel * 0.3, 'lowpass', 700, 1); }
   private snare(t: number, vel: number) { this.nz(t, 0.11, vel * 0.22, 'highpass', 1800, 0.8); this.drum(210, 170, t, 0.07, vel * 0.12); }
   private cymbal(t: number, vel: number, dur = 1.8, swell = false) { this.nz(t, dur, vel * 0.16, 'highpass', 5200, 0.5, 0.8, swell ? dur * 0.9 : 0.004); }
 
@@ -209,15 +212,19 @@ export class Music {
     const c = this.ctx; if (c.state !== 'running') return;
     if (this.next < c.currentTime) { this.next = c.currentTime + 0.05; this.step = 0; }   // fell behind: restart the bar cleanly rather than racing to catch up
     while (this.next < c.currentTime + 0.7) {   // far enough ahead to ride out a stalled frame in a heavy fight
-      this.smoothI += (this.intensity - this.smoothI) * 0.06;
-      const I = this.smoothI, bpm = 64 + 78 * Math.pow(I, 0.8), sd = 60 / bpm / 4;
+      // the fight on screen comes in bursts; the score rises with it at once but takes half a minute to stand down,
+      // so it does not lurch between full battle and a quiet harp every time the firing pauses
+      this.hold = Math.max(this.intensity, this.hold - this.lastSd / 32);
+      this.smoothI += (this.hold - this.smoothI) * 0.06;
+      const I = this.smoothI, bpm = 64 + 78 * Math.pow(I, 0.8), sd = this.lastSd = 60 / bpm / 4;
       if (this.step === 0) this.newBar(I);
       this.playStep(this.next, sd, I);
       this.next += sd; this.step = (this.step + 1) % 16;
     }
   }
   private newBar(I: number) {
-    const want = I < 0.26 ? 0 : I < 0.6 ? 1 : 2, esc = want > this.level;
+    // escalate at the next bar; de-escalate only at the end of a four-bar phrase and only once well below the threshold
+    const L0 = this.level, want = I >= (L0 >= 2 ? 0.5 : 0.6) ? 2 : I >= (L0 >= 1 ? 0.18 : 0.26) ? 1 : 0, esc = want > this.level;
     if (this.bar % 4 === 0 || esc) {
       if (esc) this.bar = 0;
       this.level = want; const p = PROG[want]; this.prog = p[(this.cycle++) % p.length];
